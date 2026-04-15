@@ -21,7 +21,7 @@ export default function LoginPage() {
           <div className="w-14 h-14 bg-primary/10 rounded-full flex items-center justify-center text-primary mb-4 border border-primary/20">
             <Shield size={28} />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight mb-2">Welcome to InsightShield</h1>
+          <h1 className="text-2xl font-bold tracking-tight mb-2">Welcome to SafeScript</h1>
           <p className="text-muted-foreground text-sm text-center">
             Sign in to securely analyze and mask sensitive data before connecting to external AI endpoints.
           </p>

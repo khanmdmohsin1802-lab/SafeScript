@@ -1,16 +1,14 @@
 "use client"
 
-import Sidebar from "../../components/Sidebar";
 import Navbar from "../../components/Navbar";
 import { ShieldAlert, AlertTriangle, Key, Mail, CheckCircle2 } from "lucide-react";
 
 export default function Dashboard() {
   return (
-    <div className="min-h-screen bg-background">
-      <Sidebar />
+    <div className="min-h-screen bg-background flex flex-col">
       <Navbar />
       
-      <main className="ml-20 p-8 w-[calc(100%-5rem)] text-white">
+      <main className="flex-1 p-8 w-full max-w-7xl mx-auto text-white">
         <h2 className="text-2xl font-bold mb-6">Security Overview</h2>
         
         {/* Metric Cards */}
