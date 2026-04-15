@@ -21,3 +21,6 @@ backend/.env
 .DS_Store
 *.log
 docker-compose.override.yml
+
+# Excluded Folders
+DOCMENTATION/
