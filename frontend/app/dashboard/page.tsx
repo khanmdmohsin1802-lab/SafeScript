@@ -173,6 +173,10 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [timelineRange, setTimelineRange] = useState<"day" | "week" | "month">("week");
+  const [isMounted, setIsMounted] = useState(false);
+
+  // Prevents SSR/client hydration mismatch on locale-dependent strings
+  useEffect(() => { setIsMounted(true); }, []);
 
   const fetchData = useCallback(async () => {
     if (!user) return;
@@ -303,7 +307,7 @@ export default function Dashboard() {
                   <span className="text-xs font-label font-bold text-[#16342b] uppercase tracking-wide">Live Monitoring</span>
                 </div>
                 <span className="text-[10px] text-[#414845]/50 font-label">
-                  Updated {lastRefresh.toLocaleTimeString()}
+                  {isMounted && `Updated ${lastRefresh.toLocaleTimeString()}`}
                 </span>
               </div>
             </header>
