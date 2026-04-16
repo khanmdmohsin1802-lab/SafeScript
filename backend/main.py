@@ -265,30 +265,104 @@ def delete_policy(
 # PROMPT / GATEWAY (all authenticated users)
 # ══════════════════════════════════════════════════════════════════════
 
+# ── Policy rule parser ─────────────────────────────────────────────────────────
+
+def parse_policy_rules(content: str) -> list[dict]:
+    """
+    Extract structured RULE blocks from a policy document.
+    Expected format per rule:
+        RULE: <label>
+        PATTERN: <regex>
+        SCORE: <int 0-100>
+        MASK: <replacement>
+    Returns list of dicts: {label, pattern, score, mask}
+    """
+    rules = []
+    current: dict = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("RULE:"):
+            if current.get("pattern"):
+                rules.append(current)
+            current = {"label": line[5:].strip(), "pattern": "", "score": 50, "mask": "[MASKED]"}
+        elif line.startswith("PATTERN:") and current:
+            current["pattern"] = line[8:].strip()
+        elif line.startswith("SCORE:") and current:
+            try:
+                current["score"] = int(line[6:].strip())
+            except ValueError:
+                pass
+        elif line.startswith("MASK:") and current:
+            current["mask"] = line[5:].strip()
+    if current.get("pattern"):
+        rules.append(current)
+    return rules
+
+
+# ── Built-in detection rules (always active) ───────────────────────────────────
+
+BUILTIN_RULES = [
+    {
+        "label":   "API Key",
+        "pattern": r"sk-[a-zA-Z0-9_\-]{10,}",
+        "score":   90,
+        "mask":    "[API_KEY_MASKED]",
+    },
+    {
+        "label":   "Email",
+        "pattern": r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+        "score":   40,
+        "mask":    "[EMAIL_MASKED]",
+    },
+    {
+        "label":   "Credit Card",
+        "pattern": r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b",
+        "score":   95,
+        "mask":    "[CREDIT_CARD_MASKED]",
+    },
+]
+
+
 @app.post("/analyze", response_model=schemas.AnalyzeResponse)
 def analyze_prompt(
     request: schemas.AnalyzeRequest,
     current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     original  = request.prompt
     sanitized = original
-    detected  = []
-    score     = 0
+    detected: list[str] = []
+    score = 0
 
-    if "sk-" in sanitized:
-        sanitized = re.sub(r'sk-[a-zA-Z0-9_]+', '[API_KEY_MASKED]', sanitized)
-        detected.append("API Key")
-        score += 85
+    # Load all policy documents for the user's admin (or the user if admin)
+    admin_id = current_user.id if current_user.role == "admin" else current_user.admin_id
+    policy_rules: list[dict] = []
+    if admin_id:
+        docs = db.query(models.PolicyDocument).filter(
+            models.PolicyDocument.created_by == admin_id
+        ).all()
+        for doc in docs:
+            policy_rules.extend(parse_policy_rules(doc.content))
 
-    if "@" in sanitized and "." in sanitized:
-        sanitized = re.sub(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', '[EMAIL_MASKED]', sanitized)
-        detected.append("Email")
-        score += 30
+    # Merge: built-in rules first, then deduplicate by label from policy rules
+    builtin_labels = {r["label"] for r in BUILTIN_RULES}
+    extra_rules = [r for r in policy_rules if r["label"] not in builtin_labels]
+    all_rules = BUILTIN_RULES + extra_rules
 
-    if re.search(r'\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b', sanitized):
-        sanitized = re.sub(r'\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b', '[CREDIT_CARD_MASKED]', sanitized)
-        detected.append("Financial Data")
-        score += 90
+    # Apply each rule
+    applied_labels: set[str] = set()
+    for rule in all_rules:
+        try:
+            if re.search(rule["pattern"], sanitized):
+                sanitized = re.sub(rule["pattern"], rule["mask"], sanitized)
+                if rule["label"] not in applied_labels:
+                    detected.append(rule["label"])
+                    score += rule["score"]
+                    applied_labels.add(rule["label"])
+        except re.error:
+            pass  # skip malformed regex
 
     return schemas.AnalyzeResponse(
         sanitized_prompt=sanitized,
