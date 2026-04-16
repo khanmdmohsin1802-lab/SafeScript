@@ -1,35 +1,123 @@
 "use client"
 
 import Navbar from "../../components/Navbar";
-import { Send, Shield, AlertOctagon, Cpu, Brain, Sparkles } from "lucide-react";
+import { Send, Shield, AlertOctagon, Cpu, Brain, Sparkles, AlertTriangle } from "lucide-react";
 import { useState } from "react";
+
+type Segment = {
+  id: number;
+  type: "text" | "API Key" | "Email";
+  rawText: string;
+  maskedText: string;
+  isMasked: boolean;
+};
 
 export default function PromptPage() {
   const [prompt, setPrompt] = useState("");
   const [analyzed, setAnalyzed] = useState(false);
-  const [maskedPrompt, setMaskedPrompt] = useState("");
+  const [segments, setSegments] = useState<Segment[]>([]);
   const [riskScore, setRiskScore] = useState(0);
+  const [isSending, setIsSending] = useState(false);
 
   const handleAnalyze = async () => {
     if (!prompt.trim()) return;
 
-    let m = prompt;
     let score = 0;
+    const newSegments: Segment[] = [];
     
-    // Core regex from MVP
-    if (m.includes("sk-")) {
-      m = m.replace(/sk-[a-zA-Z0-9_]+/g, "[API_KEY_MASKED]");
-      score += 85;
-    }
+    // Using a combined regex to catch and tokenize in sequence
+    const regex = /(sk-[a-zA-Z0-9_]+|[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)/g;
     
-    if (m.includes("@")) {
-      m = m.replace(/[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g, "[EMAIL_MASKED]");
-      score += 30;
+    let match;
+    let lastIndex = 0;
+    let idCounter = 0;
+
+    while ((match = regex.exec(prompt)) !== null) {
+      // Catch preceding text
+      if (match.index > lastIndex) {
+        newSegments.push({
+          id: idCounter++,
+          type: "text",
+          rawText: prompt.substring(lastIndex, match.index),
+          maskedText: "",
+          isMasked: false
+        });
+      }
+
+      // Catch the sensitive token
+      const raw = match[0];
+      const type = raw.startsWith("sk-") ? "API Key" : "Email";
+      const maskedText = type === "API Key" ? "[API_KEY_MASKED]" : "[EMAIL_MASKED]";
+      
+      score += type === "API Key" ? 85 : 30;
+
+      newSegments.push({
+        id: idCounter++,
+        type,
+        rawText: raw,
+        maskedText,
+        isMasked: true // Fully masked by default natively
+      });
+
+      lastIndex = regex.lastIndex;
     }
 
-    setMaskedPrompt(m);
+    // Catch trailing text
+    if (lastIndex < prompt.length) {
+      newSegments.push({
+        id: idCounter++,
+        type: "text",
+        rawText: prompt.substring(lastIndex),
+        maskedText: "",
+        isMasked: false
+      });
+    }
+
+    setSegments(newSegments);
     setRiskScore(Math.min(score, 100));
     setAnalyzed(true);
+  };
+
+  const toggleMask = (id: number) => {
+    setSegments(prev => prev.map(seg => 
+      seg.id === id ? { ...seg, isMasked: !seg.isMasked } : seg
+    ));
+  };
+
+  const currentUnmaskedItems = segments.filter(s => s.type !== "text" && !s.isMasked);
+
+  const handleSend = async () => {
+    setIsSending(true);
+    
+    // Stitch payload together dynamically
+    const finalPayload = segments.map(seg => 
+      seg.type === "text" ? seg.rawText : (seg.isMasked ? seg.maskedText : seg.rawText)
+    ).join("");
+
+    const isOverride = currentUnmaskedItems.length > 0;
+    const sensitiveItemsList = currentUnmaskedItems.map(s => s.type);
+
+    try {
+      await fetch("http://127.0.0.1:8000/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          final_prompt: finalPayload,
+          original_prompt: isOverride ? finalPayload : prompt,
+          override: isOverride,
+          sensitive_items: sensitiveItemsList
+        })
+      });
+      alert(isOverride ? "Sent! Sensitive data was transmitted and logged." : "Prompt Sent Safely!");
+    } catch (e) {
+      console.error(e);
+      alert("Failed to connect to backend server.");
+    } finally {
+      setIsSending(false);
+      setAnalyzed(false);
+      setPrompt("");
+      setSegments([]);
+    }
   };
 
   const loadSample = () => {
@@ -119,7 +207,7 @@ export default function PromptPage() {
           /* Intercepted/Analyzed State */
           <div className="w-full bg-surface border border-border rounded-2xl p-6 shadow-2xl animate-in zoom-in-95 duration-300">
             <h2 className="text-2xl font-bold mb-2">SafeScript Validation</h2>
-            <p className="text-muted-foreground mb-6">Review the masked prompt before it's sent to the AI endpoint.</p>
+            <p className="text-muted-foreground mb-6">Click on masked items to individually toggle revealing their values before sending.</p>
 
             <div className="flex items-center gap-4 mb-6 pb-4 border-b border-border">
               {riskScore > 50 ? (
@@ -146,14 +234,34 @@ export default function PromptPage() {
                 </div>
               </div>
               
-              {/* Sanitized */}
+              {/* Interactive Segment Block */}
               <div>
-                <h3 className="text-sm text-primary font-medium mb-2">Sanitized Prompt (AI will see this)</h3>
-                <textarea
-                  className="w-full h-48 bg-background border border-primary/50  rounded-xl p-4 text-white focus:outline-none focus:border-primary resize-none"
-                  value={maskedPrompt}
-                  onChange={(e) => setMaskedPrompt(e.target.value)}
-                />
+                <h3 className={`text-sm font-medium mb-2 ${currentUnmaskedItems.length > 0 ? 'text-danger' : 'text-primary'}`}>
+                  {currentUnmaskedItems.length > 0 ? "Payload (Unmasked Values Active)" : "Sanitized Payload (AI will see this)"}
+                </h3>
+                <div className={`w-full h-48 bg-background border rounded-xl p-4 text-white overflow-y-auto whitespace-pre-wrap leading-relaxed transition-colors ${currentUnmaskedItems.length > 0 ? 'border-danger/50' : 'border-primary/50'}`}>
+                  {segments.map((seg) => {
+                    if (seg.type === "text") {
+                      return <span key={seg.id}>{seg.rawText}</span>;
+                    }
+
+                    // Render Interactive Sensitive Pill
+                    return (
+                      <button
+                        key={seg.id}
+                        onClick={() => toggleMask(seg.id)}
+                        className={`inline-flex px-1.5 py-0.5 mx-1 rounded text-sm font-mono tracking-tight transition-all cursor-pointer shadow-sm hover:-translate-y-0.5 ${
+                          seg.isMasked 
+                            ? "bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30" 
+                            : "bg-danger text-white border border-danger shadow-danger/20"
+                        }`}
+                        title={seg.isMasked ? "Click to Unmask" : "Click to Mask"}
+                      >
+                        {seg.isMasked ? seg.maskedText : seg.rawText}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -161,17 +269,25 @@ export default function PromptPage() {
               <button 
                 onClick={() => setAnalyzed(false)} 
                 className="text-muted-foreground hover:text-white px-4 py-2 transition-colors"
+                disabled={isSending}
               >
                 Cancel & Edit
               </button>
               
-              <div className="flex gap-4">
-                {riskScore > 50 && (
-                   <button className="text-danger border border-danger/30 hover:bg-danger/10 px-6 py-2 rounded-lg font-medium transition-colors">
-                     Override & Unmask
-                   </button>
+              <div className="flex items-center gap-4">
+                
+                {currentUnmaskedItems.length > 0 && (
+                  <div className="flex items-center text-danger text-sm font-medium bg-danger/10 px-4 py-2 rounded-lg mr-2 animate-in fade-in duration-300">
+                     <AlertTriangle size={16} className="mr-2" />
+                     ⚠️ Sending Sensitive Data ({currentUnmaskedItems.length} items)
+                  </div>
                 )}
-                <button className="bg-primary hover:bg-primary/90 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors shadow-lg shadow-primary/20">
+                
+                <button 
+                  onClick={handleSend}
+                  disabled={isSending}
+                  className={`${currentUnmaskedItems.length > 0 ? 'bg-danger hover:bg-danger/90' : 'bg-primary hover:bg-primary/90'} text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors shadow-lg disabled:opacity-50`}
+                >
                   <Send size={18} /> Confirm & Send
                 </button>
               </div>

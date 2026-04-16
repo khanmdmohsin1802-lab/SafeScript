@@ -11,7 +11,9 @@ class AnalyzeResponse(BaseModel):
 
 class SendRequest(BaseModel):
     final_prompt: str
+    original_prompt: Optional[str] = None
     override: bool = False
+    sensitive_items: List[str] = []
 
 class SendResponse(BaseModel):
     status: str
@@ -22,6 +24,8 @@ class LogEntry(BaseModel):
     user: str
     risk_level: str
     timestamp: str
+    exact_prompt: Optional[str] = None
+    sensitive_items: List[str] = []
 
 class LogsResponse(BaseModel):
     logs: List[LogEntry]

@@ -47,6 +47,7 @@ class Override(Base):
     prompt_id = Column(UUID(as_uuid=True), ForeignKey("prompts.id"), nullable=False)
     override_type = Column(String, nullable=False)
     risk_level = Column(String, nullable=False)
+    justification = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="overrides")

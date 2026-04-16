@@ -16,7 +16,12 @@ app = FastAPI(title="InsightShield API", version="1.0.0")
 # CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], # Next.js frontend
+    allow_origins=[
+        "http://localhost:3000", 
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -57,21 +62,36 @@ def analyze_prompt(request: schemas.AnalyzeRequest, db: Session = Depends(get_db
         risk_score=min(score, 100)
     )
 
+IN_MEMORY_LOGS = []
+
 @app.post("/send", response_model=schemas.SendResponse)
 def send_prompt(request: schemas.SendRequest):
-    # Mock sending to external LLM (e.g. Gemini/OpenAI)
-    # In reality, this would make an API call to the LLM with the sanitized prompt
-    print(f"Sending prompt to LLM: {request.final_prompt} (Override: {request.override})")
+    if request.override:
+        print(f"🔥 OVERRIDE INITIATED: Sending Original Prompt to LLM: {request.original_prompt}")
+        IN_MEMORY_LOGS.insert(0, {
+            "action": "Sensitive Override Sent",
+            "user": "admin@safescript.dev",
+            "risk_level": "High",
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "exact_prompt": request.original_prompt,
+            "sensitive_items": request.sensitive_items
+        })
+    else:
+        print(f"Sending Sanitized Prompt to LLM: {request.final_prompt}")
+        IN_MEMORY_LOGS.insert(0, {
+            "action": "Masked Prompt Sent",
+            "user": "admin@safescript.dev",
+            "risk_level": "Low",
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "exact_prompt": request.final_prompt,
+            "sensitive_items": []
+        })
+        
     return schemas.SendResponse(status="success", message="Prompt sent safely.")
 
 @app.get("/logs", response_model=schemas.LogsResponse)
 def get_logs(db: Session = Depends(get_db)):
-    # Mock logs for the dashboard
-    return schemas.LogsResponse(logs=[
-        {"action": "API Key Masked", "user": "dev@company.com", "risk_level": "High", "timestamp": "12:01"},
-        {"action": "Email Masked", "user": "intern@company.com", "risk_level": "Medium", "timestamp": "12:03"},
-        {"action": "Override Sent", "user": "manager@company.com", "risk_level": "High", "timestamp": "12:05"},
-    ])
+    return schemas.LogsResponse(logs=IN_MEMORY_LOGS)
 
 @app.get("/")
 def health_check():
