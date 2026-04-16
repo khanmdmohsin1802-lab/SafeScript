@@ -342,15 +342,12 @@ def analyze_prompt(
     detected: list[str] = []
     score = 0
 
-    # Load all policy documents for the user's admin (or the user if admin)
-    admin_id = current_user.id if current_user.role == "admin" else current_user.admin_id
+    # Load ALL policy documents in the system and apply to every prompt.
+    # Policies are global redaction rules — any admin's uploaded rules apply to all users.
     policy_rules: list[dict] = []
-    if admin_id:
-        docs = db.query(models.PolicyDocument).filter(
-            models.PolicyDocument.created_by == admin_id
-        ).all()
-        for doc in docs:
-            policy_rules.extend(parse_policy_rules(doc.content))
+    docs = db.query(models.PolicyDocument).all()
+    for doc in docs:
+        policy_rules.extend(parse_policy_rules(doc.content))
 
     # Merge: built-in rules first, then deduplicate by label from policy rules
     builtin_labels = {r["label"] for r in BUILTIN_RULES}
