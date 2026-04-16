@@ -8,3 +8,4 @@ redis
 presidio-analyzer
 presidio-anonymizer
 spacy
+google-generativeai

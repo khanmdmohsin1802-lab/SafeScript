@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime
 import re
+import os
+import google.generativeai as genai
 
 import models
 from database import engine, get_db
@@ -12,6 +14,16 @@ import schemas
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="InsightShield API", version="1.0.0")
+
+# Setup Gemini
+from dotenv import load_dotenv
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # CORS for frontend
 app.add_middleware(
@@ -87,7 +99,16 @@ def send_prompt(request: schemas.SendRequest):
             "sensitive_items": []
         })
         
-    return schemas.SendResponse(status="success", message="Prompt sent safely.")
+    ai_response = "Mock AI Response: Please set GEMINI_API_KEY in .env to connect to Gemini."
+    if GEMINI_API_KEY:
+        try:
+            model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
+            response = model.generate_content(request.final_prompt)
+            ai_response = response.text
+        except Exception as e:
+            ai_response = f"Gemini Error: {str(e)}"
+            
+    return schemas.SendResponse(status="success", message="Prompt sent safely.", ai_response=ai_response)
 
 @app.get("/logs", response_model=schemas.LogsResponse)
 def get_logs(db: Session = Depends(get_db)):

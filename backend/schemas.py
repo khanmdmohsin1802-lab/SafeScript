@@ -18,6 +18,7 @@ class SendRequest(BaseModel):
 class SendResponse(BaseModel):
     status: str
     message: str
+    ai_response: Optional[str] = None
 
 class LogEntry(BaseModel):
     action: str
