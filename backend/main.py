@@ -92,14 +92,15 @@ def send_prompt(request: schemas.SendRequest):
         })
     else:
         print(f"Sending Sanitized Prompt to LLM: {request.final_prompt}")
-        IN_MEMORY_LOGS.insert(0, {
-            "action": "Masked Prompt Sent",
-            "user": "admin@safescript.dev",
-            "risk_level": "Low",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "exact_prompt": request.final_prompt,
-            "sensitive_items": []
-        })
+        if request.has_sensitive_data:
+            IN_MEMORY_LOGS.insert(0, {
+                "action": "Masked Prompt Sent",
+                "user": "admin@safescript.dev",
+                "risk_level": "Low",
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "exact_prompt": request.final_prompt,
+                "sensitive_items": []
+            })
         
     ai_response = "Mock AI Response: Please set GEMINI_API_KEY in .env to connect to Gemini."
     if GEMINI_API_KEY:

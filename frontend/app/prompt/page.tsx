@@ -18,6 +18,61 @@ type Message = {
   isFlagged?: boolean;
 };
 
+function parseMessage(text: string) {
+  if (!text) return null;
+  const lines = text.split('\n');
+  return lines.map((line, i) => {
+    // Check if hr
+    if (line.trim() === '***' || line.trim() === '---') {
+      return <hr key={i} className="my-5 border-border shadow-[0_0_10px_rgba(255,255,255,0.05)]" />;
+    }
+    
+    // Check if h3
+    if (line.trim().startsWith('### ')) {
+      return <h3 key={i} className="text-lg font-bold text-white mt-4 mb-2 animate-in fade-in slide-in-from-bottom-2" style={{ animationFillMode: "both", animationDelay: `${i * 35}ms`, animationDuration: "600ms" }}>{line.replace('### ', '')}</h3>;
+    }
+
+    // Check if list item
+    let isListItem = false;
+    if (line.trim().startsWith('* ') || line.trim().startsWith('- ')) {
+      isListItem = true;
+      line = line.substring(2);
+    }
+
+    // Bold
+    let parts = line.split(/(\*\*.*?\*\*|\*[^\*]+\*)/g);
+    
+    const formattedLine = parts.map((part, j) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={j} className="font-bold tracking-wide text-white">{part.slice(2, -2)}</strong>;
+      }
+      if (part.startsWith('*') && part.endsWith('*')) {
+        return <em key={j} className="text-white/80 italic">{part.slice(1, -1)}</em>;
+      }
+      return <span key={j}>{part}</span>;
+    });
+
+    if (isListItem) {
+      return (
+        <div key={i} className="flex gap-2.5 my-1.5 animate-in fade-in slide-in-from-bottom-2" style={{ animationFillMode: "both", animationDelay: `${i * 35}ms`, animationDuration: "600ms" }}>
+          <span className="text-primary/70 mt-0.5">•</span>
+          <span>{formattedLine}</span>
+        </div>
+      );
+    }
+    
+    if (line.trim() === '') {
+      return <div key={i} className="h-2"></div>;
+    }
+
+    return (
+      <div key={i} className="my-1.5 animate-in fade-in slide-in-from-bottom-2 leading-relaxed tracking-tight" style={{ animationFillMode: "both", animationDelay: `${i * 35}ms`, animationDuration: "600ms" }}>
+        {formattedLine}
+      </div>
+    );
+  });
+}
+
 export default function PromptPage() {
   const [prompt, setPrompt] = useState("");
   const [analyzed, setAnalyzed] = useState(false);
@@ -26,7 +81,8 @@ export default function PromptPage() {
   const [isSending, setIsSending] = useState(false);
   
   const [messages, setMessages] = useState<Message[]>([]);
-  const [selectedModel, setSelectedModel] = useState("gemini-1.5-flash");
+  const [selectedModel, setSelectedModel] = useState("Gemini 3.1 Flash Lite");
+  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -36,6 +92,53 @@ export default function PromptPage() {
       chatEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, analyzed]);
+
+  const executeSend = async (currentSegments: Segment[], currentPrompt: string, override: boolean) => {
+    setIsSending(true);
+    
+    // Stitch payload together dynamically
+    const finalPayload = currentSegments.map(seg => 
+      seg.type === "text" ? seg.rawText : (seg.isMasked ? seg.maskedText : seg.rawText)
+    ).join("");
+
+    const currentUnmaskedItems = currentSegments.filter(s => s.type !== "text" && !s.isMasked);
+    const isOverride = override || currentUnmaskedItems.length > 0;
+    const sensitiveItemsList = currentUnmaskedItems.map(s => s.type);
+    const hasSensitiveData = currentSegments.some(s => s.type !== "text");
+
+    // Optimistically add user bubble to chat UI immediately
+    setMessages(prev => [...prev, { role: "user", content: finalPayload, isFlagged: isOverride }]);
+
+    // Dismiss validation UI
+    setAnalyzed(false);
+    setPrompt("");
+    setSegments([]);
+
+    try {
+      const resp = await fetch("http://127.0.0.1:8000/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          final_prompt: finalPayload,
+          original_prompt: isOverride ? finalPayload : currentPrompt,
+          override: isOverride,
+          sensitive_items: sensitiveItemsList,
+          has_sensitive_data: hasSensitiveData
+        })
+      });
+      
+      const data = await resp.json();
+      
+      // Append exact Gemini response to UI
+      setMessages(prev => [...prev, { role: "ai", content: data.ai_response || "Received empty response from API." }]);
+
+    } catch (e) {
+      console.error(e);
+      setMessages(prev => [...prev, { role: "ai", content: "Error: Failed to connect to SafeScript backend API." }]);
+    } finally {
+      setIsSending(false);
+    }
+  };
 
   const handleAnalyze = async () => {
     if (!prompt.trim()) return;
@@ -74,6 +177,12 @@ export default function PromptPage() {
       });
     }
 
+    if (score === 0) {
+      setSegments(newSegments);
+      executeSend(newSegments, prompt, false);
+      return;
+    }
+
     setSegments(newSegments);
     setRiskScore(Math.min(score, 100));
     setAnalyzed(true);
@@ -85,48 +194,8 @@ export default function PromptPage() {
 
   const currentUnmaskedItems = segments.filter(s => s.type !== "text" && !s.isMasked);
 
-  const handleSend = async () => {
-    setIsSending(true);
-    
-    // Stitch payload together dynamically
-    const finalPayload = segments.map(seg => 
-      seg.type === "text" ? seg.rawText : (seg.isMasked ? seg.maskedText : seg.rawText)
-    ).join("");
-
-    const isOverride = currentUnmaskedItems.length > 0;
-    const sensitiveItemsList = currentUnmaskedItems.map(s => s.type);
-
-    // Optimistically add user bubble to chat UI immediately
-    setMessages(prev => [...prev, { role: "user", content: finalPayload, isFlagged: isOverride }]);
-
-    // Dismiss validation UI
-    setAnalyzed(false);
-    setPrompt("");
-    setSegments([]);
-
-    try {
-      const resp = await fetch("http://127.0.0.1:8000/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          final_prompt: finalPayload,
-          original_prompt: isOverride ? finalPayload : prompt,
-          override: isOverride,
-          sensitive_items: sensitiveItemsList
-        })
-      });
-      
-      const data = await resp.json();
-      
-      // Append exact Gemini response to UI
-      setMessages(prev => [...prev, { role: "ai", content: data.ai_response || "Received empty response from API." }]);
-
-    } catch (e) {
-      console.error(e);
-      setMessages(prev => [...prev, { role: "ai", content: "Error: Failed to connect to SafeScript backend API." }]);
-    } finally {
-      setIsSending(false);
-    }
+  const handleSend = () => {
+    executeSend(segments, prompt, false);
   };
 
   const loadSample = () => {
@@ -144,21 +213,23 @@ export default function PromptPage() {
         
         {/* Model Selector Top Bar */}
         <div className="w-full flex justify-between items-center mb-4 pl-2">
-          <div className="relative group inline-block">
-             <button className="flex items-center gap-2 bg-surface hover:bg-surface/80 border border-border px-4 py-2 rounded-xl font-medium transition-colors cursor-pointer">
-                Gemini Model <ChevronDown size={14} className="text-muted-foreground" />
+          <div className="relative inline-block">
+             <button onClick={() => setIsModelMenuOpen(!isModelMenuOpen)} className="flex items-center gap-2 bg-surface hover:bg-surface/80 border border-border px-4 py-2 rounded-xl font-medium transition-colors cursor-pointer">
+                {selectedModel} <ChevronDown size={14} className="text-muted-foreground" />
              </button>
-             <div className="absolute top-12 left-0 w-48 bg-surface border border-border rounded-xl p-2 hidden group-hover:block shadow-2xl z-50">
-                <div className="px-3 py-2 text-sm hover:bg-white/5 rounded-lg font-medium text-white cursor-pointer flex items-center justify-between">
-                   Gemini 3.1 Flash Lite <div className="w-2 h-2 rounded-full bg-success"></div>
-                </div>
-                <div className="px-3 py-2 text-sm hover:bg-white/5 rounded-lg font-medium text-muted-foreground cursor-pointer flex justify-between">
-                   Claude 3.5 Sonnet <span className="text-[10px] uppercase border border-border px-1.5 py-0.5 rounded text-muted-foreground">Pro</span>
-                </div>
-                <div className="px-3 py-2 text-sm hover:bg-white/5 rounded-lg font-medium text-muted-foreground cursor-pointer flex justify-between">
-                   GPT-4o <span className="text-[10px] uppercase border border-border px-1.5 py-0.5 rounded text-muted-foreground">Pro</span>
-                </div>
-             </div>
+             {isModelMenuOpen && (
+               <div className="absolute top-12 left-0 w-48 bg-surface border border-border rounded-xl p-2 block shadow-2xl z-50">
+                  <div onClick={() => { setSelectedModel("Gemini 3.1 Flash Lite"); setIsModelMenuOpen(false); }} className="px-3 py-2 text-sm hover:bg-white/5 rounded-lg font-medium text-white cursor-pointer flex items-center justify-between">
+                     Gemini 3.1 Flash Lite {selectedModel === "Gemini 3.1 Flash Lite" && <div className="w-2 h-2 rounded-full bg-success"></div>}
+                  </div>
+                  <div onClick={() => { setSelectedModel("Claude 3.5 Sonnet"); setIsModelMenuOpen(false); }} className="px-3 py-2 text-sm hover:bg-white/5 rounded-lg font-medium text-muted-foreground cursor-pointer flex justify-between">
+                     Claude 3.5 Sonnet {selectedModel === "Claude 3.5 Sonnet" ? <div className="w-2 h-2 rounded-full bg-success mt-1"></div> : <span className="text-[10px] uppercase border border-border px-1.5 py-0.5 rounded text-muted-foreground">Pro</span>}
+                  </div>
+                  <div onClick={() => { setSelectedModel("GPT-4o"); setIsModelMenuOpen(false); }} className="px-3 py-2 text-sm hover:bg-white/5 rounded-lg font-medium text-muted-foreground cursor-pointer flex justify-between">
+                     GPT-4o {selectedModel === "GPT-4o" ? <div className="w-2 h-2 rounded-full bg-success mt-1"></div> : <span className="text-[10px] uppercase border border-border px-1.5 py-0.5 rounded text-muted-foreground">Pro</span>}
+                  </div>
+               </div>
+             )}
           </div>
           <div className="text-xs text-muted-foreground flex items-center gap-2">
             <Shield size={14} className="text-success" /> Gateway Active
@@ -188,20 +259,24 @@ export default function PromptPage() {
            ) : (
              <div className="w-full flex flex-col gap-6 pt-4 pb-12">
                {messages.map((msg, idx) => (
-                  <div key={idx} className={`w-full flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div key={idx} className={`w-full flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in zoom-in-95 duration-500`}>
                      
                      {msg.role === 'ai' && (
-                        <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center mr-3 mt-1 shrink-0 text-primary">
+                        <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center mr-3 mt-1 shrink-0 text-primary shadow-[0_0_15px_rgba(99,102,241,0.2)]">
                           <Bot size={18} />
                         </div>
                      )}
 
-                     <div className={`max-w-[80%] whitespace-pre-wrap leading-relaxed ${
+                     <div className={`max-w-[80%] leading-relaxed ${
                          msg.role === 'user' 
-                           ? 'bg-surface/60 border border-border/50 px-5 py-3.5 rounded-2xl rounded-tr-sm text-white relative' 
+                           ? 'bg-surface/60 border border-border/50 px-5 py-3.5 rounded-2xl rounded-tr-sm text-white relative shadow-lg' 
                            : 'text-gray-200'
                        }`}>
-                         {msg.content}
+                         {msg.role === 'user' ? (
+                           <div className="whitespace-pre-wrap">{msg.content}</div>
+                         ) : (
+                           <div>{parseMessage(msg.content)}</div>
+                         )}
                          
                          {/* Optional warning badge underneath user msg if it overrode policies */}
                          {msg.role === 'user' && msg.isFlagged && (
@@ -214,15 +289,18 @@ export default function PromptPage() {
                ))}
                
                {isSending && (
-                 <div className="w-full flex justify-start animate-fade-in">
-                   <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center mr-3 shrink-0 text-primary animate-pulse">
-                      <Bot size={18} />
-                   </div>
-                   <div className="text-muted-foreground flex space-x-1 items-center mt-2 h-4">
-                     <div className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                     <div className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                     <div className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce"></div>
-                   </div>
+                 <div className="w-full flex justify-start animate-fade-in relative animate-in fade-in zoom-in-95 duration-300">
+                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center mr-3 shrink-0 text-primary relative shadow-[0_0_20px_rgba(99,102,241,0.4)]">
+                       <div className="absolute inset-0 rounded-full border border-primary/50 animate-ping"></div>
+                       <Bot size={18} className="relative z-10" />
+                    </div>
+                    <div className="bg-surface border border-border/50 px-5 py-3 rounded-2xl rounded-tl-sm flex flex-col gap-2 min-w-[100px] shadow-lg relative overflow-hidden">
+                       <div className="flex space-x-2 items-center justify-center h-4">
+                         <div className="w-1.5 h-1.5 bg-primary/80 rounded-full animate-bounce [animation-delay:-0.3s] shadow-[0_0_8px_rgba(99,102,241,1)]"></div>
+                         <div className="w-1.5 h-1.5 bg-primary/80 rounded-full animate-bounce [animation-delay:-0.15s] shadow-[0_0_8px_rgba(99,102,241,1)]"></div>
+                         <div className="w-1.5 h-1.5 bg-primary/80 rounded-full animate-bounce shadow-[0_0_8px_rgba(99,102,241,1)]"></div>
+                       </div>
+                    </div>
                  </div>
                )}
 
@@ -300,7 +378,7 @@ export default function PromptPage() {
            <div className="w-full bg-background border border-border border-t-0 rounded-b-2xl p-4 shadow-2xl relative">
              <textarea
                className="w-full bg-transparent text-white focus:outline-none resize-none placeholder:text-muted-foreground text-[16px] mb-2 min-h-[50px] max-h-[200px]"
-               placeholder="Chat with Gemini 1.5. Prohibited phrases will be safely caught..."
+               placeholder={`Chat with ${selectedModel}. Prohibited phrases will be safely caught...`}
                value={prompt}
                onChange={(e) => setPrompt(e.target.value)}
                onKeyDown={(e) => { if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAnalyze(); }}}

@@ -14,6 +14,7 @@ class SendRequest(BaseModel):
     original_prompt: Optional[str] = None
     override: bool = False
     sensitive_items: List[str] = []
+    has_sensitive_data: bool = False
 
 class SendResponse(BaseModel):
     status: str
