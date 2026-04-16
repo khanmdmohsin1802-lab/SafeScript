@@ -1,10 +1,15 @@
 "use client";
 
-import { Send, Shield, Brain, ChevronDown, Bot, MessageSquare, Database, Terminal, ShieldCheck, Plus, HelpCircle, Lock } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
+import {
+  Send, Shield, Brain, ChevronDown, Bot, Plus,
+  HelpCircle, Lock, Pencil, Check, X, Trash2,
+} from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
-/* ─────────────────────── types ─────────────────────── */
+const API = "http://127.0.0.1:8000";
+
+/* ─────────────────────── Types ─────────────────────── */
 type Segment = {
   id: number;
   type: "text" | "API Key" | "Email";
@@ -14,19 +19,20 @@ type Segment = {
 };
 
 type Message = {
+  id?: string;
   role: "user" | "ai";
   content: string;
   isFlagged?: boolean;
 };
 
-type ChatSession = {
+type Session = {
   id: string;
   title: string;
-  messages: Message[];
-  icon: string;
+  created_at: string;
+  updated_at: string;
 };
 
-/* ─────────────────────── markdown parser ─────────────────────── */
+/* ─────────────────────── Markdown Parser ─────────────────────── */
 function parseMessage(text: string) {
   if (!text) return null;
   const lines = text.split("\n");
@@ -35,7 +41,8 @@ function parseMessage(text: string) {
       return <hr key={i} className="my-5 border-[#c1c8c4]" />;
     if (line.trim().startsWith("### "))
       return (
-        <h3 key={i} className="text-base font-bold text-[#16342b] mt-4 mb-2 animate-in fade-in slide-in-from-bottom-2" style={{ animationFillMode: "both", animationDelay: `${i * 35}ms`, animationDuration: "600ms" }}>
+        <h3 key={i} className="text-base font-bold text-[#16342b] mt-4 mb-2 animate-in fade-in slide-in-from-bottom-2"
+          style={{ animationFillMode: "both", animationDelay: `${i * 35}ms`, animationDuration: "600ms" }}>
           {line.replace("### ", "")}
         </h3>
       );
@@ -54,25 +61,27 @@ function parseMessage(text: string) {
     });
     if (isListItem)
       return (
-        <div key={i} className="flex gap-2.5 my-1.5 animate-in fade-in slide-in-from-bottom-2" style={{ animationFillMode: "both", animationDelay: `${i * 35}ms`, animationDuration: "600ms" }}>
+        <div key={i} className="flex gap-2.5 my-1.5 animate-in fade-in slide-in-from-bottom-2"
+          style={{ animationFillMode: "both", animationDelay: `${i * 35}ms`, animationDuration: "600ms" }}>
           <span className="text-[#16342b]/60 mt-0.5">•</span>
           <span>{formattedLine}</span>
         </div>
       );
     if (line.trim() === "") return <div key={i} className="h-2" />;
     return (
-      <div key={i} className="my-1.5 animate-in fade-in slide-in-from-bottom-2 leading-relaxed" style={{ animationFillMode: "both", animationDelay: `${i * 35}ms`, animationDuration: "600ms" }}>
+      <div key={i} className="my-1.5 animate-in fade-in slide-in-from-bottom-2 leading-relaxed"
+        style={{ animationFillMode: "both", animationDelay: `${i * 35}ms`, animationDuration: "600ms" }}>
         {formattedLine}
       </div>
     );
   });
 }
 
-/* ─────────────────────── component ─────────────────────── */
+/* ─────────────────────── Component ─────────────────────── */
 export default function PromptPage() {
   const router = useRouter();
 
-  /* chat state */
+  /* Chat state */
   const [prompt, setPrompt] = useState("");
   const [analyzed, setAnalyzed] = useState(false);
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -80,55 +89,128 @@ export default function PromptPage() {
   const [isSending, setIsSending] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
 
-  /* model selector */
+  /* Model selector */
   const [selectedModel, setSelectedModel] = useState("Gemini 3.1 Flash Lite");
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
 
-  /* sidebar / session history */
-  const [sessions, setSessions] = useState<ChatSession[]>([
-    { id: "1", title: "Financial Analysis Q3", messages: [], icon: "chat" },
-    { id: "2", title: "Script Review #42", messages: [], icon: "doc" },
-    { id: "3", title: "Database Query", messages: [], icon: "db" },
-    { id: "4", title: "API Integration Bugfix", messages: [], icon: "terminal" },
-    { id: "5", title: "Security Audit Review", messages: [], icon: "shield" },
-  ]);
+  /* Sidebar / DB sessions */
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+
+  /* Rename state */
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
+  /* ── Auto-scroll ── */
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, analyzed]);
 
-  /* ── New Chat ── */
-  const handleNewChat = () => {
-    if (messages.length > 0) {
-      const title = messages[0]?.content?.slice(0, 32) || "New Chat";
-      const newSession: ChatSession = {
-        id: Date.now().toString(),
-        title,
-        messages,
-        icon: "chat",
-      };
+  /* ── Focus rename input when it appears ── */
+  useEffect(() => {
+    if (renamingId) renameInputRef.current?.focus();
+  }, [renamingId]);
+
+  /* ── Fetch sessions from DB ── */
+  const fetchSessions = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/sessions`);
+      const data: Session[] = await res.json();
+      setSessions(data);
+    } catch {
+      /* backend offline */
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSessions();
+  }, [fetchSessions]);
+
+  /* ── Create new session in DB ── */
+  const handleNewChat = async () => {
+    try {
+      const res = await fetch(`${API}/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "New Chat" }),
+      });
+      const newSession: Session = await res.json();
       setSessions((prev) => [newSession, ...prev]);
+      setActiveSessionId(newSession.id);
+    } catch {
+      /* fallback: just clear messages */
     }
     setMessages([]);
     setPrompt("");
     setAnalyzed(false);
     setSegments([]);
-    setActiveSessionId(null);
   };
 
-  /* ── Load historic session ── */
-  const loadSession = (session: ChatSession) => {
-    setMessages(session.messages);
-    setActiveSessionId(session.id);
-    setAnalyzed(false);
-    setPrompt("");
-    setSegments([]);
+  /* ── Load historic session from DB ── */
+  const loadSession = async (sessionId: string) => {
+    try {
+      const res = await fetch(`${API}/sessions/${sessionId}`);
+      const data = await res.json();
+      // Map DB messages to local format
+      const mapped: Message[] = (data.messages || []).map((m: { id: string; role: "user" | "ai"; content: string; is_flagged: boolean }) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        isFlagged: m.is_flagged,
+      }));
+      setMessages(mapped);
+      setActiveSessionId(sessionId);
+      setAnalyzed(false);
+      setPrompt("");
+      setSegments([]);
+    } catch {
+      /* silently fail */
+    }
   };
 
-  /* ── Core send logic (unchanged) ── */
+  /* ── Delete session ── */
+  const deleteSession = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await fetch(`${API}/sessions/${sessionId}`, { method: "DELETE" });
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      if (activeSessionId === sessionId) {
+        setMessages([]);
+        setActiveSessionId(null);
+      }
+    } catch { /* ignore */ }
+  };
+
+  /* ── Start rename ── */
+  const startRename = (session: Session, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRenamingId(session.id);
+    setRenameValue(session.title);
+  };
+
+  /* ── Commit rename ── */
+  const commitRename = async (sessionId: string) => {
+    const trimmed = renameValue.trim();
+    if (!trimmed) { setRenamingId(null); return; }
+    try {
+      const res = await fetch(`${API}/sessions/${sessionId}/rename`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      const updated: Session = await res.json();
+      setSessions((prev) => prev.map((s) => (s.id === sessionId ? updated : s)));
+    } catch { /* ignore */ }
+    setRenamingId(null);
+  };
+
+  /* ── Core send logic ── */
   const executeSend = async (currentSegments: Segment[], currentPrompt: string, override: boolean) => {
     setIsSending(true);
     const finalPayload = currentSegments
@@ -144,8 +226,24 @@ export default function PromptPage() {
     setPrompt("");
     setSegments([]);
 
+    /* If no active session, create one first */
+    let sessionId = activeSessionId;
+    if (!sessionId) {
+      try {
+        const res = await fetch(`${API}/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: finalPayload.slice(0, 40) || "New Chat" }),
+        });
+        const newSession: Session = await res.json();
+        sessionId = newSession.id;
+        setActiveSessionId(newSession.id);
+        setSessions((prev) => [newSession, ...prev]);
+      } catch { /* ignore */ }
+    }
+
     try {
-      const resp = await fetch("http://127.0.0.1:8000/send", {
+      const resp = await fetch(`${API}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -154,10 +252,14 @@ export default function PromptPage() {
           override: isOverride,
           sensitive_items: sensitiveItemsList,
           has_sensitive_data: hasSensitiveData,
+          session_id: sessionId,
         }),
       });
       const data = await resp.json();
       setMessages((prev) => [...prev, { role: "ai", content: data.ai_response || "Received empty response from API." }]);
+
+      /* Refresh session list so auto-title from backend is reflected */
+      fetchSessions();
     } catch (e) {
       console.error(e);
       setMessages((prev) => [...prev, { role: "ai", content: "Error: Failed to connect to SafeScript backend API." }]);
@@ -166,7 +268,7 @@ export default function PromptPage() {
     }
   };
 
-  /* ── Analyze + detect PII (unchanged) ── */
+  /* ── Analyze + detect PII (unchanged logic) ── */
   const handleAnalyze = async () => {
     if (!prompt.trim()) return;
     let score = 0;
@@ -201,23 +303,11 @@ export default function PromptPage() {
     setSegments((prev) => prev.map((seg) => (seg.id === id ? { ...seg, isMasked: !seg.isMasked } : seg)));
 
   const currentUnmaskedItems = segments.filter((s) => s.type !== "text" && !s.isMasked);
-
   const handleSend = () => executeSend(segments, prompt, false);
-
   const loadSample = () =>
     setPrompt("Please summarize this user data: email is john.doe@company.com and the temporary API key is sk-v1abc9X_2L!");
 
-  /* ── Icon helper for sidebar ── */
-  const SessionIcon = ({ icon }: { icon: string }) => {
-    const cls = "w-4 h-4 shrink-0";
-    if (icon === "doc") return <MessageSquare className={cls} />;
-    if (icon === "db") return <Database className={cls} />;
-    if (icon === "terminal") return <Terminal className={cls} />;
-    if (icon === "shield") return <ShieldCheck className={cls} />;
-    return <MessageSquare className={cls} />;
-  };
-
-  /* ────────────────────── render ────────────────────── */
+  /* ────────────────────── Render ────────────────────── */
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: `
@@ -229,6 +319,8 @@ export default function PromptPage() {
         .glass-panel { background: rgba(248,250,245,0.85); backdrop-filter: blur(24px); }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        .session-row:hover .session-actions { opacity: 1; }
+        .session-actions { opacity: 0; transition: opacity 0.2s; }
       `}} />
 
       <div className="font-body flex h-screen w-screen overflow-hidden bg-[#f8faf5] text-[#191c1a] fixed inset-0">
@@ -252,7 +344,7 @@ export default function PromptPage() {
           </div>
         </nav>
 
-        {/* ═══════════════ BODY (below nav) ═══════════════ */}
+        {/* ═══════════════ BODY ═══════════════ */}
         <div className="flex w-full h-full pt-16">
 
           {/* ═══ LEFT SIDEBAR ═══ */}
@@ -267,23 +359,70 @@ export default function PromptPage() {
               </button>
             </div>
 
-            {/* Recent History */}
+            {/* Session list */}
             <div className="flex-1 overflow-y-auto scrollbar-hide px-3 space-y-1">
               <p className="font-label text-[10px] font-bold uppercase tracking-widest text-[#414845]/50 px-2 mb-3 mt-1">Recent History</p>
-              {sessions.map((session) => (
-                <button
-                  key={session.id}
-                  onClick={() => loadSession(session)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 text-left text-sm ${
-                    activeSessionId === session.id
-                      ? "bg-[#ecefea] text-[#16342b] font-semibold"
-                      : "text-[#16342b]/60 hover:bg-[#e1e3de] hover:text-[#16342b]"
-                  }`}
-                >
-                  <SessionIcon icon={session.icon} />
-                  <span className="truncate font-label">{session.title}</span>
-                </button>
-              ))}
+
+              {sessionsLoading ? (
+                <div className="px-3 py-2 text-xs text-[#414845]/40 font-label animate-pulse">Loading chats…</div>
+              ) : sessions.length === 0 ? (
+                <div className="px-3 py-4 text-xs text-[#414845]/40 font-label text-center">No chats yet.<br/>Click &ldquo;New Chat&rdquo; to begin.</div>
+              ) : (
+                sessions.map((session) => (
+                  <div
+                    key={session.id}
+                    className={`session-row group w-full flex items-center gap-2 px-3 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${
+                      activeSessionId === session.id
+                        ? "bg-[#ecefea] text-[#16342b] font-semibold"
+                        : "text-[#16342b]/60 hover:bg-[#e1e3de] hover:text-[#16342b]"
+                    }`}
+                    onClick={() => loadSession(session.id)}
+                  >
+                    {renamingId === session.id ? (
+                      /* ── Inline rename input ── */
+                      <div className="flex-1 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          ref={renameInputRef}
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commitRename(session.id);
+                            if (e.key === "Escape") setRenamingId(null);
+                          }}
+                          className="flex-1 bg-white border border-[#c1c8c4]/50 rounded-lg px-2 py-0.5 text-xs text-[#191c1a] outline-none focus:ring-1 focus:ring-[#16342b]/30"
+                        />
+                        <button onClick={() => commitRename(session.id)} className="p-1 hover:text-[#16342b]">
+                          <Check className="w-3 h-3" />
+                        </button>
+                        <button onClick={() => setRenamingId(null)} className="p-1 hover:text-red-500">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="truncate font-label text-sm flex-1">{session.title}</span>
+                        {/* Action icons — visible on hover */}
+                        <div className="session-actions flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={(e) => startRename(session, e)}
+                            className="p-1 rounded hover:bg-[#c1c8c4]/30 transition-colors"
+                            title="Rename"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => deleteSession(session.id, e)}
+                            className="p-1 rounded hover:bg-red-100 hover:text-red-600 transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))
+              )}
             </div>
 
             {/* Footer links */}
@@ -299,12 +438,11 @@ export default function PromptPage() {
 
           {/* ═══ MAIN CHAT ═══ */}
           <main className="flex-1 flex flex-col overflow-hidden bg-gradient-to-br from-[#f8faf5] via-[#f2f4ef] to-[#e6deff]/10 relative">
-
-            {/* Background art blobs */}
+            {/* Background art */}
             <div className="absolute top-[10%] right-[-10%] w-[35rem] h-[35rem] bg-[#ffdbca]/10 blur-[100px] -z-0 rounded-full pointer-events-none" />
             <div className="absolute bottom-[-5%] left-[5%] w-[25rem] h-[25rem] bg-[#cac1ee]/10 blur-[120px] -z-0 rounded-full pointer-events-none" />
 
-            {/* ── model selector sub-header ── */}
+            {/* Model selector sub-header */}
             <header className="z-10 h-14 px-6 flex items-center justify-between border-b border-[#c1c8c4]/20 bg-[#f8faf5]/60 backdrop-blur-md shrink-0">
               <div className="relative">
                 <button
@@ -330,13 +468,20 @@ export default function PromptPage() {
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-2 text-xs font-label text-[#414845] font-medium">
-                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                Secure Channel Active
+              <div className="flex items-center gap-4">
+                {activeSessionId && (
+                  <span className="text-[10px] font-label text-[#414845]/50 uppercase tracking-wider">
+                    Session active • auto-saving
+                  </span>
+                )}
+                <div className="flex items-center gap-2 text-xs font-label text-[#414845] font-medium">
+                  <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                  Secure Channel Active
+                </div>
               </div>
             </header>
 
-            {/* ── conversation area ── */}
+            {/* Conversation area */}
             <section className="flex-1 overflow-y-auto scrollbar-hide px-8 py-6 space-y-6 z-10">
 
               {/* Empty state */}
@@ -363,8 +508,7 @@ export default function PromptPage() {
                 <div className="max-w-3xl mx-auto w-full flex flex-col gap-6">
                   {messages.map((msg, idx) =>
                     msg.role === "ai" ? (
-                      /* AI bubble */
-                      <div key={idx} className="flex gap-3 items-start animate-in fade-in zoom-in-95 duration-500">
+                      <div key={msg.id ?? idx} className="flex gap-3 items-start animate-in fade-in zoom-in-95 duration-500">
                         <div className="w-9 h-9 rounded-xl bg-[#16342b] flex items-center justify-center shrink-0 shadow-md">
                           <Bot className="w-5 h-5 text-[#c8eadc]" />
                         </div>
@@ -372,12 +516,11 @@ export default function PromptPage() {
                           <div className="p-4 bg-[#ffffff] shadow-sm rounded-2xl rounded-tl-none border border-[#c1c8c4]/20 text-[#191c1a] text-sm leading-relaxed">
                             {parseMessage(msg.content)}
                           </div>
-                          <span className="text-[10px] font-label font-bold text-[#414845]/40 ml-1">JUST NOW</span>
+                          <span className="text-[10px] font-label font-bold text-[#414845]/40 ml-1">SAVED</span>
                         </div>
                       </div>
                     ) : (
-                      /* User bubble */
-                      <div key={idx} className="flex gap-3 items-start flex-row-reverse animate-in fade-in zoom-in-95 duration-500">
+                      <div key={msg.id ?? idx} className="flex gap-3 items-start flex-row-reverse animate-in fade-in zoom-in-95 duration-500">
                         <div className="w-9 h-9 rounded-xl bg-[#ffdbca] flex items-center justify-center shrink-0">
                           <span className="text-[#795f51] font-bold text-sm">U</span>
                         </div>
@@ -390,7 +533,7 @@ export default function PromptPage() {
                               </div>
                             )}
                           </div>
-                          <span className="text-[10px] font-label font-bold text-[#414845]/40 mr-1">JUST NOW</span>
+                          <span className="text-[10px] font-label font-bold text-[#414845]/40 mr-1">SAVED</span>
                         </div>
                       </div>
                     )
@@ -411,13 +554,11 @@ export default function PromptPage() {
                     </div>
                   )}
 
-                  {/* ── SafeScript Verification (sanitizer popup — colour scheme updated) ── */}
+                  {/* SafeScript Verification popup (colour scheme only updated, logic intact) */}
                   {analyzed && (
                     <div className="w-full flex justify-end animate-in slide-in-from-bottom-4 duration-300">
                       <div className="w-[92%] bg-[#ffffff] border border-[#c1c8c4]/30 shadow-2xl shadow-[#16342b]/5 rounded-2xl p-5 relative overflow-hidden">
-                        {/* Left accent bar */}
                         <div className="absolute top-0 left-0 w-1 h-full bg-[#16342b] rounded-l-2xl" />
-
                         <div className="flex justify-between items-start mb-4 pl-2">
                           <div>
                             <h2 className="text-base font-bold flex items-center gap-2 text-[#16342b]">
@@ -432,7 +573,6 @@ export default function PromptPage() {
                           )}
                         </div>
 
-                        {/* Token display */}
                         <div className="w-full bg-[#f2f4ef] border border-[#c1c8c4]/20 rounded-xl p-4 text-[#191c1a] font-mono text-sm leading-8 pl-4">
                           {segments.map((seg) => {
                             if (seg.type === "text") return <span key={seg.id}>{seg.rawText}</span>;
@@ -452,12 +592,8 @@ export default function PromptPage() {
                           })}
                         </div>
 
-                        {/* Actions */}
                         <div className="flex justify-between items-center mt-4 pl-2">
-                          <button
-                            onClick={() => setAnalyzed(false)}
-                            className="text-xs font-semibold text-[#414845] hover:text-[#16342b] px-3 py-1.5 transition-colors"
-                          >
+                          <button onClick={() => setAnalyzed(false)} className="text-xs font-semibold text-[#414845] hover:text-[#16342b] px-3 py-1.5 transition-colors">
                             Return to Editor
                           </button>
                           <div className="flex items-center gap-3">
@@ -487,7 +623,7 @@ export default function PromptPage() {
               )}
             </section>
 
-            {/* ── input area ── */}
+            {/* Input area */}
             <footer className={`z-10 p-5 pt-0 bg-transparent transition-all duration-500 ${analyzed ? "opacity-30 pointer-events-none saturate-0" : "opacity-100"}`}>
               <div className="max-w-3xl mx-auto">
                 <div className="glass-panel rounded-xl shadow-2xl shadow-[#16342b]/5 p-2 border border-[#c1c8c4]/30">
@@ -520,7 +656,7 @@ export default function PromptPage() {
                   </div>
                 </div>
                 <p className="text-center mt-2 text-[10px] font-label text-[#414845]/50 uppercase tracking-[0.2em]">
-                  SafeScript Gateway Active • Multi-Layer PII Scrubbing Enabled
+                  SafeScript Gateway Active • Chats auto-saved to database
                 </p>
               </div>
             </footer>
