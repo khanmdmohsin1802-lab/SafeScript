@@ -13,53 +13,263 @@ from dotenv import load_dotenv
 import models
 from database import engine, get_db
 import schemas
+from auth import (
+    hash_password, verify_password,
+    create_access_token,
+    get_current_user, require_admin,
+)
 
 # ── Bootstrap ──────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY")
+ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "SAFESCRIPT-ADMIN-2026")
+
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Create all tables (including new chat tables)
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="SafeScript API", version="2.0.0")
+app = FastAPI(title="SafeScript API", version="3.0.0")
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:3003",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://127.0.0.1:3002",
-        "http://127.0.0.1:3003",
+        "http://localhost:3000", "http://localhost:3001",
+        "http://localhost:3002", "http://localhost:3003",
+        "http://127.0.0.1:3000", "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002", "http://127.0.0.1:3003",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── In-memory audit log (kept for /logs + /stats compatibility) ────────────────
+# In-memory audit log (survives the process, cleared on restart)
 IN_MEMORY_LOGS: list = []
 
 
 # ══════════════════════════════════════════════════════════════════════
-# EXISTING ENDPOINTS (logic unchanged)
+# AUTH
 # ══════════════════════════════════════════════════════════════════════
 
 @app.get("/")
 def health_check():
-    return {"status": "ok", "message": "SafeScript API v2 is running."}
+    return {"status": "ok", "message": "SafeScript API v3 is running."}
 
+
+@app.post("/auth/signup", response_model=schemas.TokenResponse)
+def signup(request: schemas.SignupRequest, db: Session = Depends(get_db)):
+    """Admin self-registration. Requires ADMIN_SECRET_KEY."""
+    # Only admin accounts can be self-created (regular users are created by admins)
+    if request.role != "admin":
+        raise HTTPException(status_code=400, detail="Self-registration is only available for admin accounts.")
+    if request.admin_secret != ADMIN_SECRET_KEY:
+        raise HTTPException(status_code=403, detail="Invalid admin authorization key.")
+    if db.query(models.User).filter(models.User.email == request.email).first():
+        raise HTTPException(status_code=409, detail="Email already registered.")
+
+    user = models.User(
+        name=request.name,
+        email=request.email,
+        password_hash=hash_password(request.password),
+        role="admin",
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token({"sub": user.id, "role": user.role, "name": user.name})
+    return schemas.TokenResponse(
+        access_token=token, role=user.role, name=user.name, user_id=user.id
+    )
+
+
+@app.post("/auth/login", response_model=schemas.TokenResponse)
+def login(request: schemas.LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == request.email).first()
+    if not user or not verify_password(request.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account deactivated. Contact your admin.")
+
+    token = create_access_token({"sub": user.id, "role": user.role, "name": user.name})
+    return schemas.TokenResponse(
+        access_token=token, role=user.role, name=user.name, user_id=user.id
+    )
+
+
+@app.get("/auth/me", response_model=schemas.UserOut)
+def me(current_user: models.User = Depends(get_current_user)):
+    return schemas.UserOut(
+        id=current_user.id,
+        name=current_user.name,
+        email=current_user.email,
+        role=current_user.role,
+        is_active=current_user.is_active,
+        created_at=current_user.created_at,
+        admin_id=current_user.admin_id,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# USER MANAGEMENT (admin only)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.get("/users", response_model=list[schemas.UserOut])
+def list_users(admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+    """List all users that were created by this admin."""
+    users = (
+        db.query(models.User)
+        .filter(models.User.admin_id == admin.id)
+        .order_by(desc(models.User.created_at))
+        .all()
+    )
+    return [
+        schemas.UserOut(
+            id=u.id, name=u.name, email=u.email, role=u.role,
+            is_active=u.is_active, created_at=u.created_at, admin_id=u.admin_id,
+        )
+        for u in users
+    ]
+
+
+@app.post("/users", response_model=schemas.UserOut)
+def create_user(
+    request: schemas.AdminCreateUserRequest,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin creates a new user account."""
+    if db.query(models.User).filter(models.User.email == request.email).first():
+        raise HTTPException(status_code=409, detail="Email already registered.")
+
+    user = models.User(
+        name=request.name,
+        email=request.email,
+        password_hash=hash_password(request.password),
+        role=request.role,
+        admin_id=admin.id,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return schemas.UserOut(
+        id=user.id, name=user.name, email=user.email, role=user.role,
+        is_active=user.is_active, created_at=user.created_at, admin_id=user.admin_id,
+    )
+
+
+@app.patch("/users/{user_id}", response_model=schemas.UserOut)
+def update_user(
+    user_id: str,
+    request: schemas.UpdateUserRequest,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    user = db.query(models.User).filter(
+        models.User.id == user_id, models.User.admin_id == admin.id
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if request.role is not None:
+        user.role = request.role
+    if request.is_active is not None:
+        user.is_active = request.is_active
+    db.commit()
+    db.refresh(user)
+    return schemas.UserOut(
+        id=user.id, name=user.name, email=user.email, role=user.role,
+        is_active=user.is_active, created_at=user.created_at, admin_id=user.admin_id,
+    )
+
+
+@app.delete("/users/{user_id}")
+def delete_user(
+    user_id: str,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    user = db.query(models.User).filter(
+        models.User.id == user_id, models.User.admin_id == admin.id
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    db.delete(user)
+    db.commit()
+    return {"status": "deleted"}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# POLICY DOCUMENTS (admin only)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.get("/policies", response_model=list[schemas.PolicyDocumentOut])
+def list_policies(admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+    docs = (
+        db.query(models.PolicyDocument)
+        .filter(models.PolicyDocument.created_by == admin.id)
+        .order_by(desc(models.PolicyDocument.created_at))
+        .all()
+    )
+    return [
+        schemas.PolicyDocumentOut(
+            id=d.id, title=d.title, content=d.content,
+            file_name=d.file_name, created_by=d.created_by, created_at=d.created_at,
+        )
+        for d in docs
+    ]
+
+
+@app.post("/policies", response_model=schemas.PolicyDocumentOut)
+def create_policy(
+    request: schemas.CreatePolicyRequest,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    doc = models.PolicyDocument(
+        title=request.title,
+        content=request.content,
+        file_name=request.file_name,
+        created_by=admin.id,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return schemas.PolicyDocumentOut(
+        id=doc.id, title=doc.title, content=doc.content,
+        file_name=doc.file_name, created_by=doc.created_by, created_at=doc.created_at,
+    )
+
+
+@app.delete("/policies/{policy_id}")
+def delete_policy(
+    policy_id: str,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    doc = db.query(models.PolicyDocument).filter(
+        models.PolicyDocument.id == policy_id,
+        models.PolicyDocument.created_by == admin.id,
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Policy not found.")
+    db.delete(doc)
+    db.commit()
+    return {"status": "deleted"}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# PROMPT / GATEWAY (all authenticated users)
+# ══════════════════════════════════════════════════════════════════════
 
 @app.post("/analyze", response_model=schemas.AnalyzeResponse)
-def analyze_prompt(request: schemas.AnalyzeRequest, db: Session = Depends(get_db)):
+def analyze_prompt(
+    request: schemas.AnalyzeRequest,
+    current_user: models.User = Depends(get_current_user),
+):
     original  = request.prompt
     sanitized = original
     detected  = []
@@ -88,32 +298,45 @@ def analyze_prompt(request: schemas.AnalyzeRequest, db: Session = Depends(get_db
 
 
 @app.post("/send", response_model=schemas.SendResponse)
-def send_prompt(request: schemas.SendRequest, db: Session = Depends(get_db)):
+def send_prompt(
+    request: schemas.SendRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     now = datetime.now()
+    log_base = {
+        "user": current_user.email,
+        "user_name": current_user.name,
+        "tag": current_user.role,
+        "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
     if request.override:
-        print(f"🔥 OVERRIDE: {request.original_prompt}")
         IN_MEMORY_LOGS.insert(0, {
+            **log_base,
             "action": "Sensitive Override Sent",
-            "user": "admin@safescript.dev",
             "risk_level": "High",
-            "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
             "exact_prompt": request.original_prompt,
             "sensitive_items": request.sensitive_items,
         })
+    elif request.has_sensitive_data:
+        IN_MEMORY_LOGS.insert(0, {
+            **log_base,
+            "action": "Masked Prompt Sent",
+            "risk_level": "Low",
+            "exact_prompt": request.final_prompt,
+            "sensitive_items": [],
+        })
     else:
-        print(f"SEND (masked): {request.final_prompt}")
-        if request.has_sensitive_data:
-            IN_MEMORY_LOGS.insert(0, {
-                "action": "Masked Prompt Sent",
-                "user": "admin@safescript.dev",
-                "risk_level": "Low",
-                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
-                "exact_prompt": request.final_prompt,
-                "sensitive_items": [],
-            })
+        IN_MEMORY_LOGS.insert(0, {
+            **log_base,
+            "action": "Clean Prompt Sent",
+            "risk_level": "Low",
+            "exact_prompt": request.final_prompt,
+            "sensitive_items": [],
+        })
 
-    # ── Call Gemini ────────────────────────────────────────────────────
+    # Gemini call
     ai_response = "Mock AI Response: Please set GEMINI_API_KEY in .env to connect to Gemini."
     if GEMINI_API_KEY:
         try:
@@ -123,179 +346,164 @@ def send_prompt(request: schemas.SendRequest, db: Session = Depends(get_db)):
         except Exception as e:
             ai_response = f"Gemini Error: {str(e)}"
 
-    # ── Persist both messages to the DB if a session_id was provided ───
+    # Persist to DB session if provided
     if request.session_id:
         try:
             session_row = db.query(models.ChatSession).filter(
                 models.ChatSession.id == request.session_id
             ).first()
             if session_row:
-                # user message
-                db.add(models.ChatMessage(
-                    session_id=request.session_id,
-                    role="user",
-                    content=request.final_prompt,
-                    is_flagged=request.override,
-                ))
-                # ai message
-                db.add(models.ChatMessage(
-                    session_id=request.session_id,
-                    role="ai",
-                    content=ai_response,
-                    is_flagged=False,
-                ))
-                # bump updated_at
+                db.add(models.ChatMessage(session_id=request.session_id, role="user",
+                                          content=request.final_prompt, is_flagged=request.override))
+                db.add(models.ChatMessage(session_id=request.session_id, role="ai",
+                                          content=ai_response, is_flagged=False))
                 session_row.updated_at = now
-                # auto-title from first user message (first 40 chars)
                 if session_row.title == "New Chat":
-                    auto_title = request.final_prompt.strip()[:40]
-                    session_row.title = auto_title if auto_title else "New Chat"
+                    session_row.title = request.final_prompt.strip()[:40] or "New Chat"
                 db.commit()
         except Exception as e:
             print(f"DB write error: {e}")
             db.rollback()
 
-    return schemas.SendResponse(
-        status="success",
-        message="Prompt sent safely.",
-        ai_response=ai_response,
-    )
+    return schemas.SendResponse(status="success", message="Prompt sent safely.", ai_response=ai_response)
 
+
+# ══════════════════════════════════════════════════════════════════════
+# AUDIT LOGS & STATS (admin only)
+# ══════════════════════════════════════════════════════════════════════
 
 @app.get("/logs", response_model=schemas.LogsResponse)
-def get_logs(db: Session = Depends(get_db)):
-    return schemas.LogsResponse(logs=IN_MEMORY_LOGS)
+def get_logs(admin: models.User = Depends(require_admin)):
+    return schemas.LogsResponse(logs=[
+        schemas.LogEntry(
+            action=l.get("action", ""),
+            user=l.get("user", ""),
+            user_name=l.get("user_name", ""),
+            tag=l.get("tag", ""),
+            risk_level=l.get("risk_level", ""),
+            timestamp=l.get("timestamp", ""),
+            exact_prompt=l.get("exact_prompt"),
+            sensitive_items=l.get("sensitive_items", []),
+        )
+        for l in IN_MEMORY_LOGS
+    ])
 
 
 @app.get("/stats")
-def get_stats():
+def get_stats(admin: models.User = Depends(require_admin)):
     total     = len(IN_MEMORY_LOGS)
     high_risk = sum(1 for log in IN_MEMORY_LOGS if log.get("risk_level") == "High")
-
-    api_key_count = sum(
-        log.get("sensitive_items", []).count("API Key") for log in IN_MEMORY_LOGS
-    )
-    email_count = sum(
-        log.get("sensitive_items", []).count("Email") for log in IN_MEMORY_LOGS
-    )
-    total_masked = api_key_count + email_count
+    api_key_count = sum(l.get("sensitive_items", []).count("API Key") for l in IN_MEMORY_LOGS)
+    email_count   = sum(l.get("sensitive_items", []).count("Email") for l in IN_MEMORY_LOGS)
+    total_masked  = api_key_count + email_count
 
     avg_risk = 0
-    if total > 0:
-        risk_pts = sum(85 if log.get("risk_level") == "High" else 30 for log in IN_MEMORY_LOGS)
+    if total:
+        risk_pts = sum(85 if l.get("risk_level") == "High" else 30 for l in IN_MEMORY_LOGS)
         avg_risk = min(round(risk_pts / total), 100)
 
-    daily_buckets: dict = defaultdict(int)
-    for log in IN_MEMORY_LOGS:
-        ts  = log.get("timestamp", "")
-        day = ts[:10] if len(ts) >= 10 else "unknown"
-        daily_buckets[day] += 1
-    sorted_days = sorted(daily_buckets.keys())[-7:]
-    timeline = [{"day": d, "count": daily_buckets[d]} for d in sorted_days]
+    daily: dict = defaultdict(int)
+    for l in IN_MEMORY_LOGS:
+        ts = l.get("timestamp", "")
+        daily[ts[:10] if len(ts) >= 10 else "unknown"] += 1
+    sorted_days = sorted(daily.keys())[-7:]
 
     return {
-        "total_prompts":   total,
-        "high_risk":       high_risk,
-        "low_risk":        total - high_risk,
-        "total_masked":    total_masked,
-        "api_key_count":   api_key_count,
-        "email_count":     email_count,
-        "avg_risk_score":  avg_risk,
-        "timeline":        timeline,
+        "total_prompts": total, "high_risk": high_risk, "low_risk": total - high_risk,
+        "total_masked": total_masked, "api_key_count": api_key_count, "email_count": email_count,
+        "avg_risk_score": avg_risk,
+        "timeline": [{"day": d, "count": daily[d]} for d in sorted_days],
     }
 
 
 # ══════════════════════════════════════════════════════════════════════
-# NEW: Chat Session Endpoints
+# CHAT SESSIONS (authenticated users, scoped to their own sessions)
 # ══════════════════════════════════════════════════════════════════════
 
 @app.get("/sessions", response_model=list[schemas.SessionOut])
-def list_sessions(db: Session = Depends(get_db)):
-    """Return all chat sessions (newest first), without messages."""
+def list_sessions(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     rows = (
         db.query(models.ChatSession)
+        .filter(models.ChatSession.user_id == current_user.id)
         .order_by(desc(models.ChatSession.updated_at))
         .all()
     )
-    return [
-        schemas.SessionOut(
-            id=str(r.id),
-            title=r.title,
-            created_at=r.created_at,
-            updated_at=r.updated_at,
-            messages=[],
-        )
-        for r in rows
-    ]
+    return [schemas.SessionOut(id=str(r.id), title=r.title, created_at=r.created_at,
+                               updated_at=r.updated_at, messages=[]) for r in rows]
 
 
 @app.post("/sessions", response_model=schemas.SessionOut)
-def create_session(request: schemas.CreateSessionRequest, db: Session = Depends(get_db)):
-    """Create a new chat session and return it."""
-    row = models.ChatSession(title=request.title or "New Chat")
+def create_session(
+    request: schemas.CreateSessionRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = models.ChatSession(title=request.title or "New Chat", user_id=current_user.id)
     db.add(row)
     db.commit()
     db.refresh(row)
-    return schemas.SessionOut(
-        id=str(row.id),
-        title=row.title,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        messages=[],
-    )
+    return schemas.SessionOut(id=str(row.id), title=row.title,
+                              created_at=row.created_at, updated_at=row.updated_at, messages=[])
 
 
 @app.get("/sessions/{session_id}", response_model=schemas.SessionOut)
-def get_session(session_id: str, db: Session = Depends(get_db)):
-    """Return a single session with all its messages."""
-    row = db.query(models.ChatSession).filter(models.ChatSession.id == session_id).first()
+def get_session(
+    session_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.query(models.ChatSession).filter(
+        models.ChatSession.id == session_id,
+        models.ChatSession.user_id == current_user.id,
+    ).first()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
-
     return schemas.SessionOut(
-        id=str(row.id),
-        title=row.title,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+        id=str(row.id), title=row.title,
+        created_at=row.created_at, updated_at=row.updated_at,
         messages=[
-            schemas.MessageOut(
-                id=str(m.id),
-                role=m.role,
-                content=m.content,
-                is_flagged=m.is_flagged,
-                created_at=m.created_at,
-            )
+            schemas.MessageOut(id=str(m.id), role=m.role, content=m.content,
+                               is_flagged=m.is_flagged, created_at=m.created_at)
             for m in row.messages
         ],
     )
 
 
 @app.patch("/sessions/{session_id}/rename", response_model=schemas.SessionOut)
-def rename_session(session_id: str, request: schemas.RenameSessionRequest, db: Session = Depends(get_db)):
-    """Rename a chat session."""
-    row = db.query(models.ChatSession).filter(models.ChatSession.id == session_id).first()
+def rename_session(
+    session_id: str,
+    request: schemas.RenameSessionRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.query(models.ChatSession).filter(
+        models.ChatSession.id == session_id,
+        models.ChatSession.user_id == current_user.id,
+    ).first()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
-
     row.title = request.title.strip() or "Untitled"
     db.commit()
     db.refresh(row)
-    return schemas.SessionOut(
-        id=str(row.id),
-        title=row.title,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        messages=[],
-    )
+    return schemas.SessionOut(id=str(row.id), title=row.title,
+                              created_at=row.created_at, updated_at=row.updated_at, messages=[])
 
 
 @app.delete("/sessions/{session_id}")
-def delete_session(session_id: str, db: Session = Depends(get_db)):
-    """Delete a session and all its messages (cascade)."""
-    row = db.query(models.ChatSession).filter(models.ChatSession.id == session_id).first()
+def delete_session(
+    session_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.query(models.ChatSession).filter(
+        models.ChatSession.id == session_id,
+        models.ChatSession.user_id == current_user.id,
+    ).first()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
-
     db.delete(row)
     db.commit()
     return {"status": "deleted"}

@@ -3,14 +3,18 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Shield, History, RefreshCw, ChevronDown, HelpCircle, Lock,
-  Sparkles, X, ScrollText,
+  Shield, History, RefreshCw, ChevronDown,
+  Sparkles, X, ScrollText, LogOut,
 } from "lucide-react";
+import { useAuth, authHeader } from "../../context/AuthContext";
+import UnauthorizedView from "../../components/UnauthorizedView";
 
 /* ─── Types ─── */
 type LogEntry = {
   action: string;
   user: string;
+  user_name: string;
+  tag: string;
   risk_level: string;
   timestamp: string;
   exact_prompt?: string;
@@ -61,7 +65,7 @@ function PayloadModal({ log, onClose }: { log: LogEntry; onClose: () => void }) 
           </div>
           <div>
             <p className="font-bold text-sm text-[#16342b]">Exact Payload</p>
-            <p className="text-[10px] font-label text-[#414845]/60">{log.timestamp} · {log.user}</p>
+            <p className="text-[10px] font-label text-[#414845]/60">{log.timestamp} · {log.user_name || log.user}</p>
           </div>
         </div>
         <div className="bg-[#f2f4ef] rounded-xl p-4 font-mono text-sm text-[#191c1a] whitespace-pre-wrap leading-relaxed max-h-64 overflow-y-auto">
@@ -85,6 +89,7 @@ function PayloadModal({ log, onClose }: { log: LogEntry; onClose: () => void }) 
 /* ─── Main ─── */
 export default function LogsPage() {
   const router = useRouter();
+  const { user, logout, isAdmin, isLoading: authLoading } = useAuth();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTimeframe, setActiveTimeframe] = useState("All");
@@ -94,8 +99,9 @@ export default function LogsPage() {
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   const fetchLogs = useCallback(async () => {
+    if (!user) return;
     try {
-      const res = await fetch(`${API}/logs`);
+      const res = await fetch(`${API}/logs`, { headers: authHeader(user.token) });
       const data = await res.json();
       setLogs(data.logs || []);
       setLastRefresh(new Date());
@@ -104,13 +110,16 @@ export default function LogsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
+    if (!authLoading && !user) { router.push("/"); return; }
     fetchLogs();
     const interval = setInterval(fetchLogs, 10_000);
     return () => clearInterval(interval);
-  }, [fetchLogs]);
+  }, [fetchLogs, user, authLoading, router]);
+
+  if (!authLoading && !isAdmin) return <UnauthorizedView pageName="Audit Logs" />;
 
   /* Filtering */
   const filtered = logs.filter((log) => {
@@ -285,10 +294,14 @@ export default function LogsPage() {
                       {/* User */}
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-[#ffdbca] flex items-center justify-center text-[#795f51] font-bold text-xs shrink-0">
-                          {log.user?.[0]?.toUpperCase() ?? "U"}
+                          {(log.user_name || log.user)?.[0]?.toUpperCase() ?? "U"}
                         </div>
-                        <span className="text-sm font-medium text-[#191c1a] truncate">{log.user}</span>
+                        <div>
+                          <span className="text-sm font-medium text-[#191c1a] truncate block">{log.user_name || log.user}</span>
+                          <span className={`text-[9px] font-label font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full ${log.tag === "admin" ? "bg-[#302a4e]/10 text-[#302a4e]" : "bg-[#ecefea] text-[#414845]"}`}>{log.tag || "user"}</span>
+                        </div>
                       </div>
+
 
                       {/* Sensitive items */}
                       <div className="flex flex-wrap gap-1">

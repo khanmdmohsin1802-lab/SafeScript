@@ -2,10 +2,11 @@
 
 import {
   Send, Shield, Brain, ChevronDown, Bot, Plus,
-  HelpCircle, Lock, Pencil, Check, X, Trash2,
+  HelpCircle, Lock, Pencil, Check, X, Trash2, LogOut,
 } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth, authHeader } from "../../context/AuthContext";
 
 const API = "http://127.0.0.1:8000";
 
@@ -80,6 +81,12 @@ function parseMessage(text: string) {
 /* ─────────────────────── Component ─────────────────────── */
 export default function PromptPage() {
   const router = useRouter();
+  const { user, logout, isLoading: authLoading } = useAuth();
+
+  /* Redirect to login if not authenticated */
+  useEffect(() => {
+    if (!authLoading && !user) router.push("/");
+  }, [user, authLoading, router]);
 
   /* Chat state */
   const [prompt, setPrompt] = useState("");
@@ -117,8 +124,9 @@ export default function PromptPage() {
 
   /* ── Fetch sessions from DB ── */
   const fetchSessions = useCallback(async () => {
+    if (!user) return;
     try {
-      const res = await fetch(`${API}/sessions`);
+      const res = await fetch(`${API}/sessions`, { headers: authHeader(user.token) });
       const data: Session[] = await res.json();
       setSessions(data);
     } catch {
@@ -126,7 +134,7 @@ export default function PromptPage() {
     } finally {
       setSessionsLoading(false);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     fetchSessions();
@@ -134,10 +142,11 @@ export default function PromptPage() {
 
   /* ── Create new session in DB ── */
   const handleNewChat = async () => {
+    if (!user) return;
     try {
       const res = await fetch(`${API}/sessions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeader(user.token) },
         body: JSON.stringify({ title: "New Chat" }),
       });
       const newSession: Session = await res.json();
@@ -154,8 +163,9 @@ export default function PromptPage() {
 
   /* ── Load historic session from DB ── */
   const loadSession = async (sessionId: string) => {
+    if (!user) return;
     try {
-      const res = await fetch(`${API}/sessions/${sessionId}`);
+      const res = await fetch(`${API}/sessions/${sessionId}`, { headers: authHeader(user.token) });
       const data = await res.json();
       // Map DB messages to local format
       const mapped: Message[] = (data.messages || []).map((m: { id: string; role: "user" | "ai"; content: string; is_flagged: boolean }) => ({
@@ -177,8 +187,9 @@ export default function PromptPage() {
   /* ── Delete session ── */
   const deleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!user) return;
     try {
-      await fetch(`${API}/sessions/${sessionId}`, { method: "DELETE" });
+      await fetch(`${API}/sessions/${sessionId}`, { method: "DELETE", headers: authHeader(user.token) });
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       if (activeSessionId === sessionId) {
         setMessages([]);
@@ -198,10 +209,11 @@ export default function PromptPage() {
   const commitRename = async (sessionId: string) => {
     const trimmed = renameValue.trim();
     if (!trimmed) { setRenamingId(null); return; }
+    if (!user) return;
     try {
       const res = await fetch(`${API}/sessions/${sessionId}/rename`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeader(user.token) },
         body: JSON.stringify({ title: trimmed }),
       });
       const updated: Session = await res.json();
@@ -228,11 +240,11 @@ export default function PromptPage() {
 
     /* If no active session, create one first */
     let sessionId = activeSessionId;
-    if (!sessionId) {
+    if (!sessionId && user) {
       try {
         const res = await fetch(`${API}/sessions`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeader(user.token) },
           body: JSON.stringify({ title: finalPayload.slice(0, 40) || "New Chat" }),
         });
         const newSession: Session = await res.json();
@@ -245,7 +257,7 @@ export default function PromptPage() {
     try {
       const resp = await fetch(`${API}/send`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeader(user?.token) },
         body: JSON.stringify({
           final_prompt: finalPayload,
           original_prompt: isOverride ? finalPayload : currentPrompt,
@@ -331,16 +343,23 @@ export default function PromptPage() {
             <span className="text-xl font-bold text-[#16342b] tracking-tight">SafeScript</span>
             <div className="hidden md:flex gap-7">
               <span className="text-[#16342b] font-bold border-b-2 border-[#16342b] pb-0.5 text-sm cursor-pointer">Gateway</span>
-              <span onClick={() => router.push("/dashboard")} className="text-[#16342b]/50 hover:text-[#16342b] transition-colors text-sm cursor-pointer">Dashboard</span>
-              <span onClick={() => router.push("/policies")} className="text-[#16342b]/50 hover:text-[#16342b] transition-colors text-sm cursor-pointer">Policies</span>
-              <span onClick={() => router.push("/logs")} className="text-[#16342b]/50 hover:text-[#16342b] transition-colors text-sm cursor-pointer">Audit Logs</span>
+              {user?.role === "admin" && <>
+                <span onClick={() => router.push("/dashboard")} className="text-[#16342b]/50 hover:text-[#16342b] transition-colors text-sm cursor-pointer">Dashboard</span>
+                <span onClick={() => router.push("/policies")} className="text-[#16342b]/50 hover:text-[#16342b] transition-colors text-sm cursor-pointer">Policies</span>
+                <span onClick={() => router.push("/logs")} className="text-[#16342b]/50 hover:text-[#16342b] transition-colors text-sm cursor-pointer">Audit Logs</span>
+              </>}
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button className="p-2 hover:bg-[#f2f4ef] rounded-full transition-colors">
+            <button className="p-2 hover:bg-[#f2f4ef] rounded-full transition-colors" title="Secure channel active">
               <Shield className="w-5 h-5 text-[#16342b]" />
             </button>
-            <div className="w-9 h-9 rounded-full bg-[#2d4b41] flex items-center justify-center text-[#c8eadc] font-bold text-sm">M</div>
+            <button onClick={() => { logout(); router.push("/"); }} className="p-2 hover:bg-red-50 rounded-full transition-colors" title="Sign out">
+              <LogOut className="w-4 h-4 text-[#414845] hover:text-red-500" />
+            </button>
+            <div className="w-9 h-9 rounded-full bg-[#2d4b41] flex items-center justify-center text-[#c8eadc] font-bold text-sm" title={user?.name}>
+              {user?.name?.[0]?.toUpperCase() ?? "U"}
+            </div>
           </div>
         </nav>
 

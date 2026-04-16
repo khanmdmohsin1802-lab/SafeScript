@@ -5,86 +5,28 @@ from sqlalchemy.orm import relationship
 from database import Base
 
 
-# Helper: store UUIDs as plain strings (works on both SQLite & PostgreSQL)
-def new_uuid():
+def new_uuid() -> str:
     return str(uuid.uuid4())
 
+
+# ── Core user model ────────────────────────────────────────────────────────────
 
 class User(Base):
     __tablename__ = "users"
 
-    id         = Column(String(36), primary_key=True, default=new_uuid)
-    email      = Column(String, unique=True, index=True, nullable=False)
-    role       = Column(String, default="dev")
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    prompts   = relationship("Prompt",      back_populates="user")
-    overrides = relationship("Override",    back_populates="user")
-    logs      = relationship("AuditLog",    back_populates="user")
-    sessions  = relationship("ChatSession", back_populates="user")
-
-
-class Organization(Base):
-    __tablename__ = "organizations"
-
-    id         = Column(String(36), primary_key=True, default=new_uuid)
-    name       = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    policies = relationship("Policy", back_populates="organization")
-
-
-class Prompt(Base):
-    __tablename__ = "prompts"
-
-    id               = Column(String(36), primary_key=True, default=new_uuid)
-    user_id          = Column(String(36), ForeignKey("users.id"), nullable=True)
-    original_prompt  = Column(Text, nullable=True)
-    sanitized_prompt = Column(Text, nullable=False)
-    risk_score       = Column(Integer, default=0)
-    created_at       = Column(DateTime, default=datetime.utcnow)
-
-    user      = relationship("User",     back_populates="prompts")
-    overrides = relationship("Override", back_populates="prompt")
-
-
-class Override(Base):
-    __tablename__ = "overrides"
-
     id            = Column(String(36), primary_key=True, default=new_uuid)
-    user_id       = Column(String(36), ForeignKey("users.id"), nullable=True)
-    prompt_id     = Column(String(36), ForeignKey("prompts.id"), nullable=False)
-    override_type = Column(String, nullable=False)
-    risk_level    = Column(String, nullable=False)
-    justification = Column(Text, nullable=True)
+    name          = Column(String(120), nullable=False)
+    email         = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    role          = Column(String(20), default="user")   # "admin" | "user"
+    is_active     = Column(Boolean, default=True)
+    # admin_id links a regular user back to the admin who created them
+    admin_id      = Column(String(36), ForeignKey("users.id"), nullable=True)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
-    user   = relationship("User",   back_populates="overrides")
-    prompt = relationship("Prompt", back_populates="overrides")
-
-
-class AuditLog(Base):
-    __tablename__ = "audit_logs"
-
-    id         = Column(String(36), primary_key=True, default=new_uuid)
-    user_id    = Column(String(36), ForeignKey("users.id"), nullable=True)
-    action     = Column(String, nullable=False)
-    meta_data  = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    user = relationship("User", back_populates="logs")
-
-
-class Policy(Base):
-    __tablename__ = "policies"
-
-    id              = Column(String(36), primary_key=True, default=new_uuid)
-    organization_id = Column(String(36), ForeignKey("organizations.id"), nullable=True)
-    rule_type       = Column(String, nullable=False)
-    config          = Column(JSON, nullable=False)
-    created_at      = Column(DateTime, default=datetime.utcnow)
-
-    organization = relationship("Organization", back_populates="policies")
+    # We query managed_users by admin_id directly — no ORM relationship needed
+    sessions    = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
+    policy_docs = relationship("PolicyDocument", back_populates="created_by_user")
 
 
 # ── Chat persistence ───────────────────────────────────────────────────────────
@@ -98,7 +40,7 @@ class ChatSession(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    user     = relationship("User",        back_populates="sessions")
+    user     = relationship("User", back_populates="sessions")
     messages = relationship(
         "ChatMessage",
         back_populates="session",
@@ -118,3 +60,19 @@ class ChatMessage(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("ChatSession", back_populates="messages")
+
+
+# ── Policy documents ───────────────────────────────────────────────────────────
+
+class PolicyDocument(Base):
+    """Admin-uploaded privacy / redaction policy documents."""
+    __tablename__ = "policy_documents"
+
+    id             = Column(String(36), primary_key=True, default=new_uuid)
+    title          = Column(String(200), nullable=False)
+    content        = Column(Text, nullable=False)        # full text of the policy
+    file_name      = Column(String(200), nullable=True)  # original uploaded filename
+    created_by     = Column(String(36), ForeignKey("users.id"), nullable=True)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+
+    created_by_user = relationship("User", back_populates="policy_docs")

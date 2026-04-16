@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 import {
   Shield, ShieldAlert, Key, Mail, AlertTriangle,
   CheckCircle2, RefreshCw, Activity, Lock, HelpCircle,
-  BarChart2, Sparkles, MessageSquare,
+  BarChart2, Sparkles, MessageSquare, LogOut,
 } from "lucide-react";
+import { useAuth, authHeader } from "../../context/AuthContext";
+import UnauthorizedView from "../../components/UnauthorizedView";
 
 /* ─── Types ─── */
 type LogEntry = {
@@ -106,16 +108,19 @@ function TimelineChart({ data }: { data: { day: string; count: number }[] }) {
 /* ─── Main Component ─── */
 export default function Dashboard() {
   const router = useRouter();
+  const { user, logout, isAdmin, isLoading: authLoading } = useAuth();
   const [stats, setStats] = useState<Stats | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   const fetchData = useCallback(async () => {
+    if (!user) return;
     try {
+      const headers = authHeader(user.token);
       const [statsRes, logsRes] = await Promise.all([
-        fetch(`${API}/stats`),
-        fetch(`${API}/logs`),
+        fetch(`${API}/stats`, { headers }),
+        fetch(`${API}/logs`, { headers }),
       ]);
       const statsData = await statsRes.json();
       const logsData = await logsRes.json();
@@ -127,26 +132,28 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
+    if (!authLoading && !user) { router.push("/"); return; }
     fetchData();
-    const interval = setInterval(fetchData, 10_000); // poll every 10 s
+    const interval = setInterval(fetchData, 10_000);
     return () => clearInterval(interval);
-  }, [fetchData]);
+  }, [fetchData, user, authLoading, router]);
 
-  /* Derived */
+  if (!authLoading && !isAdmin) return <UnauthorizedView pageName="Dashboard" />;
+
   const riskScore = stats?.avg_risk_score ?? 0;
-  const circumference = 2 * Math.PI * 88; // r=88
+  const circumference = 2 * Math.PI * 88;
   const dashOffset = circumference - (riskScore / 100) * circumference;
   const riskLabel = riskScore < 30 ? "Low Risk" : riskScore < 70 ? "Medium Risk" : "High Risk";
   const riskColor = riskScore < 30 ? "#16342b" : riskScore < 70 ? "#e09c3d" : "#ba1a1a";
 
-  /* Breakdown bars */
   const total = (stats?.api_key_count ?? 0) + (stats?.email_count ?? 0);
   const apiPct = total > 0 ? Math.round(((stats?.api_key_count ?? 0) / total) * 100) : 0;
   const emailPct = total > 0 ? Math.round(((stats?.email_count ?? 0) / total) * 100) : 0;
-  const financialPct = 0; // not tracked yet – kept for visual balance
+  const financialPct = 0;
+
 
   return (
     <>
