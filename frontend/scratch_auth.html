@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SafeScript | Secure Onboarding</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200;400;600;700;800&amp;family=Plus+Jakarta+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-primary-fixed-variant": "#2f4d42",
+                      "on-primary-container": "#99baad",
+                      "on-background": "#191c1a",
+                      "tertiary-container": "#474065",
+                      "surface-tint": "#46655a",
+                      "tertiary": "#302a4e",
+                      "surface-container-highest": "#e1e3de",
+                      "on-secondary-fixed-variant": "#594235",
+                      "on-secondary": "#ffffff",
+                      "tertiary-fixed": "#e6deff",
+                      "surface": "#f8faf5",
+                      "on-error": "#ffffff",
+                      "background": "#f8faf5",
+                      "surface-container-lowest": "#ffffff",
+                      "on-tertiary-container": "#b6add9",
+                      "on-secondary-container": "#795f51",
+                      "error-container": "#ffdad6",
+                      "secondary": "#73594b",
+                      "secondary-fixed": "#ffdbca",
+                      "primary-fixed": "#c8eadc",
+                      "primary": "#16342b",
+                      "outline-variant": "#c1c8c4",
+                      "tertiary-fixed-dim": "#cac1ee",
+                      "on-error-container": "#93000a",
+                      "on-tertiary-fixed-variant": "#484267",
+                      "on-primary": "#ffffff",
+                      "inverse-surface": "#2e312e",
+                      "inverse-primary": "#adcec0",
+                      "on-tertiary-fixed": "#1c1639",
+                      "surface-container-low": "#f2f4ef",
+                      "surface-container-high": "#e7e9e4",
+                      "surface-dim": "#d8dbd6",
+                      "secondary-container": "#ffdbca",
+                      "error": "#ba1a1a",
+                      "surface-bright": "#f8faf5",
+                      "on-primary-fixed": "#012018",
+                      "secondary-fixed-dim": "#e1c0af",
+                      "on-tertiary": "#ffffff",
+                      "surface-variant": "#e1e3de",
+                      "inverse-on-surface": "#eff1ec",
+                      "on-secondary-fixed": "#29170d",
+                      "outline": "#727975",
+                      "primary-fixed-dim": "#adcec0",
+                      "on-surface-variant": "#414845",
+                      "primary-container": "#2d4b41",
+                      "on-surface": "#191c1a",
+                      "surface-container": "#ecefea"
+              },
+              "borderRadius": {
+                      "DEFAULT": "1rem",
+                      "lg": "2rem",
+                      "xl": "3rem",
+                      "full": "9999px"
+              },
+              "fontFamily": {
+                      "headline": ["Manrope"],
+                      "body": ["Manrope"],
+                      "label": ["Plus Jakarta Sans"]
+              }
+            },
+          }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .bouncy-transition {
+            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+    </style>
+</head>
+<body class="bg-surface font-body text-on-surface overflow-hidden">
+<main class="flex min-h-screen w-full">
+<!-- Left Column: Visual Expanse -->
+<section class="hidden lg:flex lg:w-7/12 bg-primary-container relative flex-col justify-end p-20 overflow-hidden">
+<!-- Abstract Illustration Background -->
+<div class="absolute inset-0 z-0">
+<div class="absolute inset-0 opacity-40 bg-gradient-to-br from-primary-container to-primary"></div>
+<div class="w-full h-full flex items-center justify-center">
+<div class="relative w-[600px] h-[600px]">
+<!-- Abstract Geometric Vault Concept -->
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-primary-fixed/20 rounded-xl rotate-12 backdrop-blur-xl border border-on-primary-container/10"></div>
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 bg-secondary-fixed/10 rounded-xl -rotate-6 backdrop-blur-2xl border border-on-primary-container/20"></div>
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-on-primary-container/10 rounded-xl rotate-45 backdrop-blur-3xl border border-on-primary-container/30 shadow-2xl"></div>
+<img alt="abstract 3d visualization" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 object-cover rounded-xl mix-blend-overlay opacity-80" data-alt="abstract 3D geometric glass structures interlocking like a secure vault in deep sage green and metallic tones with soft volumetric lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDKHRdAokMnRdFXXb0E_B19CWmfXsuTeWHUIYr9y4t2uqYvAKE9mBuEPf0gsDcIjhaMXZUNJhl1PKytBeMXVQOPFGrxE7lMXSTz0-dnqqjH5_3w87Mu_qWnbCJzASfGNcAyVuJrd7z4TDQu_jRU9Qv16LwQ-5q7DHuGu1sXD7WYm6YENcz2FHLvJwV4UBahY_VIMEF9eqE26WyG0s6wOgF-nXb2jNzkuMglgvs_nyaGZf0a-s_W9PKKwa68DB5LvsKa4A85iKGbCUPP"/>
+</div>
+</div>
+</div>
+<!-- Left Text Content -->
+<div class="relative z-10 space-y-6 max-w-xl">
+<div class="flex items-center gap-3 mb-12">
+<span class="material-symbols-outlined text-primary-fixed text-4xl" data-weight="fill">security</span>
+<span class="text-primary-fixed font-bold text-2xl tracking-tight">SafeScript</span>
+</div>
+<h1 class="text-primary-fixed text-6xl font-extrabold tracking-tighter leading-[1.1]">
+                    Zero-Trust AI Adoption
+                </h1>
+<p class="text-on-primary-container text-lg font-light leading-relaxed max-w-md">
+                    Secure your enterprise intelligence with automated PII masking and sovereign gateway controls.
+                </p>
+</div>
+</section>
+<!-- Right Column: Authentication Card -->
+<section class="w-full lg:w-5/12 bg-surface flex items-center justify-center p-6 md:p-12 lg:p-24">
+<div class="w-full max-w-md space-y-10">
+<!-- Branding Mobile Only -->
+<div class="lg:hidden flex items-center gap-3 mb-8">
+<span class="material-symbols-outlined text-primary text-3xl" data-weight="fill">security</span>
+<span class="text-primary font-bold text-xl tracking-tight">SafeScript</span>
+</div>
+<div class="bg-surface-container-low p-1.5 rounded-full flex items-center w-fit mx-auto mb-10 shadow-sm">
+<button class="px-8 py-2.5 rounded-full text-sm font-semibold bg-primary text-on-primary bouncy-transition shadow-lg">Sign In</button>
+<button class="px-8 py-2.5 rounded-full text-sm font-medium text-on-surface-variant hover:text-on-surface transition-colors">Create Account</button>
+</div>
+<div class="space-y-8">
+<header class="space-y-2">
+<h2 class="text-3xl font-bold tracking-tight text-on-surface">Welcome back</h2>
+<p class="text-on-surface-variant font-light">Access your secure intelligence portal</p>
+</header>
+<!-- Form -->
+<form class="space-y-6" onsubmit="return false;">
+<div class="space-y-1.5">
+<label class="font-label text-[10px] uppercase tracking-[0.2em] text-outline ml-4">Corporate Identity</label>
+<input class="w-full h-14 px-6 bg-surface-container-high border-0 rounded-xl text-on-surface placeholder:text-outline focus:ring-2 focus:ring-primary-container/30 transition-all duration-300" placeholder="name@company.com" type="email"/>
+</div>
+<div class="space-y-1.5">
+<div class="flex justify-between items-center px-4">
+<label class="font-label text-[10px] uppercase tracking-[0.2em] text-outline">Access Key</label>
+<a class="text-[10px] uppercase tracking-[0.1em] text-primary font-semibold hover:underline" href="#">Reset</a>
+</div>
+<input class="w-full h-14 px-6 bg-surface-container-high border-0 rounded-xl text-on-surface placeholder:text-outline focus:ring-2 focus:ring-primary-container/30 transition-all duration-300" placeholder="••••••••" type="password"/>
+</div>
+<button class="w-full h-14 bg-gradient-to-r from-primary to-primary-container text-on-primary rounded-xl font-semibold tracking-wide shadow-xl hover:shadow-primary-container/20 hover:scale-[1.01] active:scale-[0.98] transition-all duration-300">
+                            Secure Login
+                        </button>
+</form>
+<!-- SSO -->
+<div class="relative py-4">
+<div class="absolute inset-0 flex items-center"><div class="w-full border-t border-outline-variant/30"></div></div>
+<div class="relative flex justify-center text-[10px] uppercase tracking-[0.2em] font-label"><span class="bg-surface px-4 text-outline">Enterprise Federation</span></div>
+</div>
+<button class="w-full h-14 flex items-center justify-center gap-3 bg-surface border border-outline-variant/40 rounded-xl font-medium text-on-surface hover:bg-surface-container-low hover:border-outline-variant transition-all duration-300 group">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">corporate_fare</span>
+                        Authenticate with SSO
+                    </button>
+</div>
+<footer class="pt-8 flex flex-col items-center gap-4">
+<p class="text-xs text-on-surface-variant/60 font-label tracking-wide uppercase">
+                        Secured by The Mindful Guardian Protocol
+                    </p>
+<div class="flex gap-6">
+<a class="text-[10px] uppercase tracking-[0.1em] text-outline hover:text-primary transition-colors" href="#">Privacy Architecture</a>
+<a class="text-[10px] uppercase tracking-[0.1em] text-outline hover:text-primary transition-colors" href="#">Compliance</a>
+</div>
+</footer>
+</div>
+</section>
+</main>
+</body></html>
