@@ -288,7 +288,13 @@ def parse_policy_rules(content: str) -> list[dict]:
                 rules.append(current)
             current = {"label": line[5:].strip(), "pattern": "", "score": 50, "mask": "[MASKED]"}
         elif line.startswith("PATTERN:") and current:
-            current["pattern"] = line[8:].strip()
+            raw_pat = line[8:].strip()
+            # Patterns from the JS frontend arrive double-escaped (\\b, \\d, etc.)
+            # because they were embedded in a JS template literal with \\ escapes.
+            # Normalise to single backslashes so Python re sees \b, \d, etc.
+            if "\\\\" in raw_pat:
+                raw_pat = raw_pat.replace("\\\\", "\\")
+            current["pattern"] = raw_pat
         elif line.startswith("SCORE:") and current:
             try:
                 current["score"] = int(line[6:].strip())
