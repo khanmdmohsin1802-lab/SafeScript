@@ -438,7 +438,7 @@ def get_stats(
     """Dynamic stats + timeline. time_range= day | week | month."""
 
     # Determine the window
-    now_dt = datetime.utcnow()
+    now_dt = datetime.now()
     if time_range == "day":
         since = now_dt - timedelta(days=1)
         n_slots, slot_fmt, slot_label_fmt = 24, "%Y-%m-%d %H", "%H:00"
