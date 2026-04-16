@@ -20,6 +20,14 @@ type LogEntry = {
   sensitive_items: string[];
 };
 
+type TimelineSlot = {
+  slot: string;
+  label: string;
+  high: number;
+  low: number;
+  count: number;
+};
+
 type Stats = {
   total_prompts: number;
   high_risk: number;
@@ -28,7 +36,8 @@ type Stats = {
   api_key_count: number;
   email_count: number;
   avg_risk_score: number;
-  timeline: { day: string; count: number }[];
+  timeline: TimelineSlot[];
+  range: string;
 };
 
 const API = "http://127.0.0.1:8000";
@@ -62,45 +71,95 @@ function StatusBadge({ action }: { action: string }) {
   );
 }
 
-/* ─── Chart ─── */
-function TimelineChart({ data }: { data: { day: string; count: number }[] }) {
-  const max = Math.max(...data.map((d) => d.count), 1);
-  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+/* ─── Stacked Timeline Chart ─── */
+function TimelineChart({ data, range }: { data: TimelineSlot[]; range: string }) {
+  const maxCount = Math.max(...data.map((d) => d.high + d.low), 1);
 
-  // Pad to 7 bars
-  const padded = Array.from({ length: 7 }, (_, i) => data[i] || { day: "", count: 0 });
+  // For week/month, only show every N-th label to avoid crowding
+  const labelStep = range === "day" ? 4 : range === "month" ? 5 : 1;
 
   return (
-    <div className="h-52 flex items-end justify-between gap-3 px-2 relative">
-      {/* Gridlines */}
-      <div className="absolute inset-0 flex flex-col justify-between pointer-events-none opacity-20 py-1">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="border-t border-[#414845]" />
-        ))}
+    <div className="space-y-4">
+      {/* Legend */}
+      <div className="flex items-center gap-5 justify-end text-[10px] font-label font-bold uppercase tracking-widest">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-[#ba1a1a] inline-block" />High Risk
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-[#2d4b41] inline-block" />Low Risk
+        </span>
       </div>
 
-      {padded.map((bar, i) => {
-        const pct = Math.round((bar.count / max) * 100);
-        const isHigh = bar.count === Math.max(...data.map((d) => d.count));
-        return (
-          <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
-            {bar.count > 0 && (
-              <div className="absolute -top-8 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-[#16342b] text-white text-[10px] px-2 py-1 rounded-lg whitespace-nowrap z-10">
-                {bar.count} event{bar.count !== 1 ? "s" : ""}
-              </div>
-            )}
+      {/* Bars */}
+      <div className="h-52 flex items-end gap-1 px-1 relative">
+        {/* Gridlines */}
+        <div className="absolute inset-0 flex flex-col justify-between pointer-events-none py-1">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="border-t border-[#c1c8c4]/20" />
+          ))}
+        </div>
+
+        {data.map((bar, i) => {
+          const totalPct = Math.round(((bar.high + bar.low) / maxCount) * 100);
+          const highPct  = bar.count > 0 ? Math.round((bar.high / bar.count) * totalPct) : 0;
+          const lowPct   = totalPct - highPct;
+          const showLabel = i % labelStep === 0 || i === data.length - 1;
+
+          return (
             <div
-              className={`w-full rounded-t-xl transition-all duration-700 ${
-                isHigh ? "bg-[#2d4b41]" : "bg-[#2d4b41]/30"
-              } hover:bg-[#2d4b41]/80`}
-              style={{ height: `${Math.max(pct, 4)}%` }}
-            />
-            <span className="text-[9px] font-label font-bold text-[#414845]/60 uppercase tracking-widest">
-              {days[i]}
-            </span>
-          </div>
-        );
-      })}
+              key={i}
+              className="flex-1 flex flex-col items-center gap-0.5 group relative min-w-0"
+            >
+              {/* Hover tooltip */}
+              {bar.count > 0 && (
+                <div className="absolute -top-10 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-all duration-200 z-20 pointer-events-none">
+                  <div className="bg-[#16342b] text-white text-[10px] px-2.5 py-1.5 rounded-lg whitespace-nowrap shadow-xl">
+                    <div className="font-bold">{bar.label}</div>
+                    {bar.high > 0 && <div className="text-red-300">{bar.high} high</div>}
+                    {bar.low  > 0 && <div className="text-[#c8eadc]">{bar.low} low</div>}
+                  </div>
+                  <div className="w-2 h-2 bg-[#16342b] rotate-45 mx-auto -mt-1" />
+                </div>
+              )}
+
+              {/* Stacked bar */}
+              <div
+                className="w-full flex flex-col justify-end rounded-t-lg overflow-hidden"
+                style={{ height: `${Math.max(totalPct, bar.count > 0 ? 4 : 1)}%` }}
+              >
+                {highPct > 0 && (
+                  <div
+                    className="w-full bg-[#ba1a1a] transition-all duration-700"
+                    style={{ height: `${(highPct / totalPct) * 100}%`, minHeight: bar.high > 0 ? "4px" : "0" }}
+                  />
+                )}
+                {lowPct > 0 && (
+                  <div
+                    className="w-full bg-[#2d4b41] transition-all duration-700"
+                    style={{ height: `${(lowPct / totalPct) * 100}%`, minHeight: bar.low > 0 ? "4px" : "0" }}
+                  />
+                )}
+                {bar.count === 0 && (
+                  <div className="w-full bg-[#c1c8c4]/20" style={{ height: "100%" }} />
+                )}
+              </div>
+
+              {/* Label */}
+              <span className={`text-[8px] font-label font-bold text-[#414845]/50 uppercase tracking-wide text-center leading-tight truncate w-full px-0.5 ${
+                showLabel ? "opacity-100" : "opacity-0"
+              }`}>
+                {bar.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Summary row */}
+      <div className="flex justify-between text-[10px] font-label text-[#414845]/50 px-1 border-t border-[#c1c8c4]/10 pt-3">
+        <span>{data.reduce((s, d) => s + d.count, 0)} total events in period</span>
+        <span>{data.reduce((s, d) => s + d.high, 0)} high-risk · {data.reduce((s, d) => s + d.low, 0)} low-risk</span>
+      </div>
     </div>
   );
 }
@@ -113,17 +172,18 @@ export default function Dashboard() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [timelineRange, setTimelineRange] = useState<"day" | "week" | "month">("week");
 
   const fetchData = useCallback(async () => {
     if (!user) return;
     try {
       const headers = authHeader(user.token);
       const [statsRes, logsRes] = await Promise.all([
-        fetch(`${API}/stats`, { headers }),
+        fetch(`${API}/stats?range=${timelineRange}`, { headers }),
         fetch(`${API}/logs`, { headers }),
       ]);
       const statsData = await statsRes.json();
-      const logsData = await logsRes.json();
+      const logsData  = await logsRes.json();
       setStats(statsData);
       setLogs(logsData.logs || []);
       setLastRefresh(new Date());
@@ -132,14 +192,17 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, timelineRange]);
 
   useEffect(() => {
     if (!authLoading && !user) { router.push("/"); return; }
     fetchData();
-    const interval = setInterval(fetchData, 10_000);
+    const interval = setInterval(fetchData, 15_000);
     return () => clearInterval(interval);
   }, [fetchData, user, authLoading, router]);
+
+  // Re-fetch whenever the user changes the range filter
+  useEffect(() => { fetchData(); }, [timelineRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!authLoading && !isAdmin) return <UnauthorizedView pageName="Dashboard" />;
 
@@ -349,25 +412,44 @@ export default function Dashboard() {
                 <div className="flex justify-between items-center mb-6">
                   <div>
                     <h3 className="text-lg font-bold text-[#16342b]">Threat Activity Timeline</h3>
-                    <p className="text-[#414845] text-xs mt-0.5">Anomalous behavior detection patterns (live data)</p>
+                    <p className="text-[#414845] text-xs mt-0.5">
+                      High vs. Low risk events — live from database
+                    </p>
                   </div>
+                  {/* Working range filter tabs */}
                   <div className="flex gap-2">
-                    {["Day", "Week", "Month"].map((label) => (
-                      <button key={label} className={`px-3 py-1.5 rounded-lg text-xs font-bold font-label transition-all ${label === "Week" ? "bg-[#16342b] text-white" : "bg-[#ecefea] text-[#414845] hover:bg-[#e1e3de]"}`}>
-                        {label.toUpperCase()}
+                    {(["day", "week", "month"] as const).map((r) => (
+                      <button
+                        key={r}
+                        onClick={() => setTimelineRange(r)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold font-label transition-all ${
+                          timelineRange === r
+                            ? "bg-[#16342b] text-white shadow-md"
+                            : "bg-[#ecefea] text-[#414845] hover:bg-[#e1e3de]"
+                        }`}
+                      >
+                        {r.toUpperCase()}
                       </button>
                     ))}
                   </div>
                 </div>
 
                 {loading ? (
-                  <div className="h-52 flex items-center justify-center text-[#414845]/40 text-sm font-label">Loading timeline…</div>
-                ) : stats?.timeline && stats.timeline.length > 0 ? (
-                  <TimelineChart data={stats.timeline} />
+                  <div className="h-64 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="w-8 h-8 border-2 border-[#16342b]/20 border-t-[#16342b] rounded-full animate-spin" />
+                      <span className="text-xs font-label text-[#414845]/40">Loading timeline…</span>
+                    </div>
+                  </div>
+                ) : stats?.timeline && stats.timeline.length > 0 && stats.timeline.some(s => s.count > 0) ? (
+                  <TimelineChart data={stats.timeline} range={timelineRange} />
                 ) : (
-                  <div className="h-52 flex flex-col items-center justify-center text-[#414845]/40 text-sm font-label gap-2">
-                    <Activity className="w-8 h-8 opacity-30" />
-                    <span>No activity yet — send a prompt via the Gateway to see data here.</span>
+                  <div className="h-64 flex flex-col items-center justify-center text-[#414845]/40 text-sm font-label gap-3">
+                    <Activity className="w-10 h-10 opacity-20" />
+                    <div className="text-center">
+                      <p className="font-semibold">No events in this period</p>
+                      <p className="text-xs mt-1 opacity-70">Send prompts via the Gateway — they will appear here instantly.</p>
+                    </div>
                   </div>
                 )}
               </div>

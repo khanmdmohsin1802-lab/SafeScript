@@ -76,3 +76,22 @@ class PolicyDocument(Base):
     created_at     = Column(DateTime, default=datetime.utcnow)
 
     created_by_user = relationship("User", back_populates="policy_docs")
+
+
+# ── Audit Log (persisted, survives restarts) ───────────────────────────────────
+
+class AuditLog(Base):
+    """Every prompt sent through the gateway is recorded here permanently."""
+    __tablename__ = "audit_logs"
+
+    id              = Column(String(36), primary_key=True, default=new_uuid)
+    user_id         = Column(String(36), ForeignKey("users.id"), nullable=True)
+    user_email      = Column(String, nullable=True)
+    user_name       = Column(String, nullable=True)
+    tag             = Column(String(20), nullable=True)   # role: "admin" | "user"
+    action          = Column(String(100), nullable=False)
+    risk_level      = Column(String(20), nullable=False)  # "High" | "Low"
+    exact_prompt    = Column(Text, nullable=True)
+    sensitive_items = Column(JSON, default=list)          # list[str]
+    created_at      = Column(DateTime, default=datetime.utcnow, index=True)
+

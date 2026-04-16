@@ -1,8 +1,8 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 import re
 import os
@@ -312,29 +312,43 @@ def send_prompt(
     }
 
     if request.override:
-        IN_MEMORY_LOGS.insert(0, {
-            **log_base,
-            "action": "Sensitive Override Sent",
-            "risk_level": "High",
-            "exact_prompt": request.original_prompt,
-            "sensitive_items": request.sensitive_items,
-        })
+        action     = "Sensitive Override Sent"
+        risk_level = "High"
+        si         = request.sensitive_items
     elif request.has_sensitive_data:
-        IN_MEMORY_LOGS.insert(0, {
-            **log_base,
-            "action": "Masked Prompt Sent",
-            "risk_level": "Low",
-            "exact_prompt": request.final_prompt,
-            "sensitive_items": [],
-        })
+        action     = "Masked Prompt Sent"
+        risk_level = "Low"
+        si         = []
     else:
-        IN_MEMORY_LOGS.insert(0, {
-            **log_base,
-            "action": "Clean Prompt Sent",
-            "risk_level": "Low",
-            "exact_prompt": request.final_prompt,
-            "sensitive_items": [],
-        })
+        action     = "Clean Prompt Sent"
+        risk_level = "Low"
+        si         = []
+
+    IN_MEMORY_LOGS.insert(0, {
+        **log_base,
+        "action": action,
+        "risk_level": risk_level,
+        "exact_prompt": request.original_prompt if request.override else request.final_prompt,
+        "sensitive_items": si,
+    })
+
+    # --- Persist to audit_logs table ---
+    try:
+        db.add(models.AuditLog(
+            user_id=current_user.id,
+            user_email=log_base["user"],
+            user_name=log_base["user_name"],
+            tag=log_base["tag"],
+            action=action,
+            risk_level=risk_level,
+            exact_prompt=request.original_prompt if request.override else request.final_prompt,
+            sensitive_items=si,
+            created_at=now,
+        ))
+        db.commit()
+    except Exception as e:
+        print(f"AuditLog write error: {e}")
+        db.rollback()
 
     # Gemini call
     ai_response = "Mock AI Response: Please set GEMINI_API_KEY in .env to connect to Gemini."
@@ -373,47 +387,144 @@ def send_prompt(
 # ══════════════════════════════════════════════════════════════════════
 
 @app.get("/logs", response_model=schemas.LogsResponse)
-def get_logs(admin: models.User = Depends(require_admin)):
-    return schemas.LogsResponse(logs=[
+def get_logs(
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Returns all audit logs from the DB (persisted) merged with any in-memory entries."""
+    db_logs = (
+        db.query(models.AuditLog)
+        .order_by(desc(models.AuditLog.created_at))
+        .limit(500)
+        .all()
+    )
+    # Build from DB first (persistent), then append any in-memory that are newer
+    db_ids_ts = {l.created_at.strftime("%Y-%m-%d %H:%M:%S") for l in db_logs}
+    entries = [
         schemas.LogEntry(
-            action=l.get("action", ""),
-            user=l.get("user", ""),
-            user_name=l.get("user_name", ""),
-            tag=l.get("tag", ""),
-            risk_level=l.get("risk_level", ""),
-            timestamp=l.get("timestamp", ""),
-            exact_prompt=l.get("exact_prompt"),
-            sensitive_items=l.get("sensitive_items", []),
+            action=l.action,
+            user=l.user_email or "",
+            user_name=l.user_name or "",
+            tag=l.tag or "user",
+            risk_level=l.risk_level,
+            timestamp=l.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            exact_prompt=l.exact_prompt,
+            sensitive_items=l.sensitive_items or [],
         )
-        for l in IN_MEMORY_LOGS
-    ])
+        for l in db_logs
+    ]
+    # Prepend any in-memory entries not yet in DB (edge case)
+    for l in IN_MEMORY_LOGS:
+        if l.get("timestamp") not in db_ids_ts:
+            entries.insert(0, schemas.LogEntry(
+                action=l.get("action", ""),
+                user=l.get("user", ""),
+                user_name=l.get("user_name", ""),
+                tag=l.get("tag", "user"),
+                risk_level=l.get("risk_level", "Low"),
+                timestamp=l.get("timestamp", ""),
+                exact_prompt=l.get("exact_prompt"),
+                sensitive_items=l.get("sensitive_items", []),
+            ))
+    return schemas.LogsResponse(logs=entries)
 
 
 @app.get("/stats")
-def get_stats(admin: models.User = Depends(require_admin)):
-    total     = len(IN_MEMORY_LOGS)
-    high_risk = sum(1 for log in IN_MEMORY_LOGS if log.get("risk_level") == "High")
-    api_key_count = sum(l.get("sensitive_items", []).count("API Key") for l in IN_MEMORY_LOGS)
-    email_count   = sum(l.get("sensitive_items", []).count("Email") for l in IN_MEMORY_LOGS)
-    total_masked  = api_key_count + email_count
+def get_stats(
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    time_range: str = Query("week", pattern="^(day|week|month)$"),
+):
+    """Dynamic stats + timeline. time_range= day | week | month."""
+
+    # Determine the window
+    now_dt = datetime.utcnow()
+    if time_range == "day":
+        since = now_dt - timedelta(days=1)
+        n_slots, slot_fmt, slot_label_fmt = 24, "%Y-%m-%d %H", "%H:00"
+    elif time_range == "month":
+        since = now_dt - timedelta(days=30)
+        n_slots, slot_fmt, slot_label_fmt = 30, "%Y-%m-%d", "%b %d"
+    else:  # week (default)
+        since = now_dt - timedelta(days=7)
+        n_slots, slot_fmt, slot_label_fmt = 7, "%Y-%m-%d", "%a"
+
+    # Fetch all audit logs within window
+    rows = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.created_at >= since)
+        .order_by(models.AuditLog.created_at)
+        .all()
+    )
+
+    all_entries = list(rows)
+
+    # Aggregate totals
+    total       = len(all_entries)
+    high_risk   = sum(1 for l in all_entries if l.risk_level == "High")
+    api_key_cnt = sum((l.sensitive_items or []).count("API Key") for l in all_entries)
+    email_cnt   = sum((l.sensitive_items or []).count("Email") for l in all_entries)
 
     avg_risk = 0
     if total:
-        risk_pts = sum(85 if l.get("risk_level") == "High" else 30 for l in IN_MEMORY_LOGS)
+        risk_pts = sum(85 if l.risk_level == "High" else 30 for l in all_entries)
         avg_risk = min(round(risk_pts / total), 100)
 
-    daily: dict = defaultdict(int)
-    for l in IN_MEMORY_LOGS:
-        ts = l.get("timestamp", "")
-        daily[ts[:10] if len(ts) >= 10 else "unknown"] += 1
-    sorted_days = sorted(daily.keys())[-7:]
+    # Build ordered slots for the timeline
+    if time_range == "day":
+        slots       = [(now_dt - timedelta(hours=i)).strftime(slot_fmt)       for i in range(n_slots - 1, -1, -1)]
+        slot_labels = [(now_dt - timedelta(hours=i)).strftime(slot_label_fmt) for i in range(n_slots - 1, -1, -1)]
+    elif time_range == "month":
+        slots       = [(now_dt - timedelta(days=i)).strftime(slot_fmt)        for i in range(n_slots - 1, -1, -1)]
+        slot_labels = [(now_dt - timedelta(days=i)).strftime(slot_label_fmt)  for i in range(n_slots - 1, -1, -1)]
+    else:  # week
+        slots       = [(now_dt - timedelta(days=i)).strftime(slot_fmt)        for i in range(6, -1, -1)]
+        slot_labels = [(now_dt - timedelta(days=i)).strftime(slot_label_fmt)  for i in range(6, -1, -1)]
+
+    # Bucket each entry into its slot
+    high_by_slot: dict = defaultdict(int)
+    low_by_slot:  dict = defaultdict(int)
+    for l in all_entries:
+        key = l.created_at.strftime(slot_fmt)
+        if l.risk_level == "High":
+            high_by_slot[key] += 1
+        else:
+            low_by_slot[key] += 1
+
+    timeline = [
+        {
+            "slot":  slots[i],
+            "label": slot_labels[i],
+            "high":  high_by_slot[slots[i]],
+            "low":   low_by_slot[slots[i]],
+            "count": high_by_slot[slots[i]] + low_by_slot[slots[i]],
+        }
+        for i in range(len(slots))
+    ]
+
+    # Global totals (all-time) for the counter cards
+    all_rows      = db.query(models.AuditLog).all()
+    total_all     = len(all_rows)
+    high_risk_all = sum(1 for l in all_rows if l.risk_level == "High")
+    api_key_all   = sum((l.sensitive_items or []).count("API Key") for l in all_rows)
+    email_all     = sum((l.sensitive_items or []).count("Email") for l in all_rows)
+    avg_risk_all  = 0
+    if total_all:
+        risk_pts_all = sum(85 if l.risk_level == "High" else 30 for l in all_rows)
+        avg_risk_all = min(round(risk_pts_all / total_all), 100)
 
     return {
-        "total_prompts": total, "high_risk": high_risk, "low_risk": total - high_risk,
-        "total_masked": total_masked, "api_key_count": api_key_count, "email_count": email_count,
-        "avg_risk_score": avg_risk,
-        "timeline": [{"day": d, "count": daily[d]} for d in sorted_days],
+        "total_prompts":  total_all,
+        "high_risk":      high_risk_all,
+        "low_risk":       total_all - high_risk_all,
+        "total_masked":   api_key_all + email_all,
+        "api_key_count":  api_key_all,
+        "email_count":    email_all,
+        "avg_risk_score": avg_risk_all,
+        "timeline":       timeline,
+        "range":          time_range,
     }
+
 
 
 # ══════════════════════════════════════════════════════════════════════
