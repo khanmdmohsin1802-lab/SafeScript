@@ -13,7 +13,7 @@ const API = "http://127.0.0.1:8000";
 /* ─────────────────────── Types ─────────────────────── */
 type Segment = {
   id: number;
-  type: "text" | "API Key" | "Email";
+  type: string;        // "text" | any entity label from the backend
   rawText: string;
   maskedText: string;
   isMasked: boolean;
@@ -280,35 +280,96 @@ export default function PromptPage() {
     }
   };
 
-  /* ── Analyze + detect PII (unchanged logic) ── */
+  /* ── Analyze: call backend /analyze which applies all active policy rules ── */
   const handleAnalyze = async () => {
     if (!prompt.trim()) return;
-    let score = 0;
-    const newSegments: Segment[] = [];
-    const regex = /(sk-[a-zA-Z0-9_]+|[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)/g;
-    let match;
-    let lastIndex = 0;
-    let idCounter = 0;
-    while ((match = regex.exec(prompt)) !== null) {
-      if (match.index > lastIndex)
-        newSegments.push({ id: idCounter++, type: "text", rawText: prompt.substring(lastIndex, match.index), maskedText: "", isMasked: false });
-      const raw = match[0];
-      const type = raw.startsWith("sk-") ? "API Key" : "Email";
-      const maskedText = type === "API Key" ? "[API_KEY_MASKED]" : "[EMAIL_MASKED]";
-      score += type === "API Key" ? 85 : 30;
-      newSegments.push({ id: idCounter++, type, rawText: raw, maskedText, isMasked: true });
-      lastIndex = regex.lastIndex;
-    }
-    if (lastIndex < prompt.length)
-      newSegments.push({ id: idCounter++, type: "text", rawText: prompt.substring(lastIndex), maskedText: "", isMasked: false });
-    if (score === 0) {
+
+    try {
+      const res = await fetch(`${API}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader(user!.token) },
+        body: JSON.stringify({ prompt }),
+      });
+      const data: { sanitized_prompt: string; entities_detected: string[]; risk_score: number } = await res.json();
+
+      if (data.entities_detected.length === 0) {
+        // No sensitive data — fast-path send immediately
+        const cleanSegments: Segment[] = [{ id: 0, type: "text", rawText: prompt, maskedText: "", isMasked: false }];
+        setSegments(cleanSegments);
+        executeSend(cleanSegments, prompt, false);
+        return;
+      }
+
+      // Reconstruct segments by walking original vs sanitized prompt.
+      // Replace each [MASK_TOKEN] in sanitized with its original text.
+      const newSegments: Segment[] = [];
+      let idCounter = 0;
+      let orig = prompt;
+      let san  = data.sanitized_prompt;
+
+      // Find all mask tokens in the sanitized string
+      const maskRe = /\[[A-Z_]+_MASKED\]/g;
+      let lastOrigIdx = 0;
+      let lastSanIdx  = 0;
+      let sanMatch: RegExpExecArray | null;
+
+      while ((sanMatch = maskRe.exec(san)) !== null) {
+        const maskStart = sanMatch.index;
+        const maskToken = sanMatch[0];
+
+        // Text before this mask: same in both strings
+        const sanPrefix = san.slice(lastSanIdx, maskStart);
+        if (sanPrefix) {
+          newSegments.push({ id: idCounter++, type: "text", rawText: sanPrefix, maskedText: "", isMasked: false });
+          lastOrigIdx += sanPrefix.length;
+        }
+
+        // Figure out what the original text was before the mask token
+        // by finding the NEXT literal prefix in the remaining orig string
+        const afterMask     = san.slice(maskStart + maskToken.length);
+        const nextMaskMatch = /\[[A-Z_]+_MASKED\]/.exec(afterMask);
+        const nextLiteral   = nextMaskMatch
+          ? afterMask.slice(0, nextMaskMatch.index)
+          : afterMask;
+
+        let rawEnd = nextLiteral
+          ? orig.indexOf(nextLiteral, lastOrigIdx)
+          : orig.length;
+        if (rawEnd === -1) rawEnd = orig.length;
+
+        const rawText = orig.slice(lastOrigIdx, rawEnd);
+
+        // Determine entity label from mask token, e.g. [EMAIL_MASKED] → "Email"
+        const entityLabel = data.entities_detected.find((e) =>
+          maskToken.toLowerCase().includes(e.toLowerCase().split(" ")[0])
+        ) ?? maskToken.replace(/[\[\]]/g, "").replace(/_MASKED/, "").replace(/_/g, " ");
+
+        newSegments.push({
+          id: idCounter++,
+          type: entityLabel,
+          rawText,
+          maskedText: maskToken,
+          isMasked: true,
+        });
+
+        lastOrigIdx = rawEnd;
+        lastSanIdx  = maskStart + maskToken.length;
+      }
+
+      // Remaining text after last mask
+      const trailing = orig.slice(lastOrigIdx);
+      if (trailing)
+        newSegments.push({ id: idCounter++, type: "text", rawText: trailing, maskedText: "", isMasked: false });
+
       setSegments(newSegments);
-      executeSend(newSegments, prompt, false);
-      return;
+      setRiskScore(Math.min(data.risk_score, 100));
+      setAnalyzed(true);
+    } catch {
+      // Fallback: just send the prompt as-is if API is unreachable
+      const fallback: Segment[] = [{ id: 0, type: "text", rawText: prompt, maskedText: "", isMasked: false }];
+      setSegments(fallback);
+      executeSend(fallback, prompt, false);
     }
-    setSegments(newSegments);
-    setRiskScore(Math.min(score, 100));
-    setAnalyzed(true);
   };
 
   const toggleMask = (id: number) =>
