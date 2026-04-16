@@ -29,12 +29,14 @@ if GEMINI_API_KEY:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000", 
+        "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:3002",
+        "http://localhost:3003",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
-        "http://127.0.0.1:3002"
+        "http://127.0.0.1:3002",
+        "http://127.0.0.1:3003",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -120,3 +122,50 @@ def get_logs(db: Session = Depends(get_db)):
 @app.get("/")
 def health_check():
     return {"status": "ok", "message": "InsightShield API is running."}
+
+
+@app.get("/stats")
+def get_stats():
+    """Return live dashboard metrics derived from the in-memory log store."""
+    total = len(IN_MEMORY_LOGS)
+    high_risk = sum(1 for log in IN_MEMORY_LOGS if log.get("risk_level") == "High")
+    low_risk = total - high_risk
+
+    # Count masked types from sensitive_items lists
+    api_key_count = sum(
+        log.get("sensitive_items", []).count("API Key") for log in IN_MEMORY_LOGS
+    )
+    email_count = sum(
+        log.get("sensitive_items", []).count("Email") for log in IN_MEMORY_LOGS
+    )
+    total_masked = api_key_count + email_count
+
+    # Average risk score (override = 85 pts, masked = 30 pts, else 0)
+    if total == 0:
+        avg_risk = 0
+    else:
+        risk_pts = sum(85 if log.get("risk_level") == "High" else 30 for log in IN_MEMORY_LOGS)
+        avg_risk = min(round(risk_pts / max(total, 1)), 100)
+
+    # Build 7-day bucket counts (keyed by date string prefix)
+    from collections import defaultdict
+    daily_buckets: dict = defaultdict(int)
+    for log in IN_MEMORY_LOGS:
+        ts = log.get("timestamp", "")
+        day = ts[:10] if len(ts) >= 10 else "unknown"
+        daily_buckets[day] += 1
+
+    # Return last 7 distinct days sorted ascending
+    sorted_days = sorted(daily_buckets.keys())[-7:]
+    timeline = [{"day": d, "count": daily_buckets[d]} for d in sorted_days]
+
+    return {
+        "total_prompts": total,
+        "high_risk": high_risk,
+        "low_risk": low_risk,
+        "total_masked": total_masked,
+        "api_key_count": api_key_count,
+        "email_count": email_count,
+        "avg_risk_score": avg_risk,
+        "timeline": timeline,
+    }
