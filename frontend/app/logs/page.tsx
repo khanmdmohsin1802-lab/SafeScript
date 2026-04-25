@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Shield, History, RefreshCw, ChevronDown,
-  Sparkles, X, ScrollText, LogOut,
+  Sparkles, X, ScrollText, LogOut, HelpCircle, Lock
 } from "lucide-react";
 import { useAuth, authHeader } from "../../context/AuthContext";
 import UnauthorizedView from "../../components/UnauthorizedView";
@@ -89,7 +89,7 @@ function PayloadModal({ log, onClose }: { log: LogEntry; onClose: () => void }) 
 /* ─── Main ─── */
 export default function LogsPage() {
   const router = useRouter();
-  const { user, logout, isAdmin, isLoading: authLoading } = useAuth();
+  const { user, isAdmin, isLoading: authLoading } = useAuth();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTimeframe, setActiveTimeframe] = useState("All");
